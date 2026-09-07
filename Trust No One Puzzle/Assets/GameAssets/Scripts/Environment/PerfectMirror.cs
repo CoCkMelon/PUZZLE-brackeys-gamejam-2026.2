@@ -1,19 +1,15 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-// Runs after all character controllers, animators, and IK have finished for the frame
 [DefaultExecutionOrder(10000)]
 public class AutoObjectMirror : MonoBehaviour
 {
     public enum MirrorAxis { X = 0, Y = 1, Z = 2 }
 
     [Header("Mirror Settings")]
-    [Tooltip("Which local axis points OUT of the mirror glass?")]
     public MirrorAxis normalAxis = MirrorAxis.Z;
 
     [Header("Objects to Mirror")]
-    [Tooltip("Drag active GameObjects from the Scene Hierarchy here.")]
     public List<GameObject> objectsToMirror = new List<GameObject>();
 
     [Header("Gizmos")]
@@ -34,24 +30,15 @@ public class AutoObjectMirror : MonoBehaviour
         public Transform ghostRoot;
         public Renderer[] realRenderers;
         public Renderer[] ghostRenderers;
+        public Light[] realLights;
+        public Light[] ghostLights;
         public List<TransformPair> bonePairs = new List<TransformPair>();
     }
 
     private readonly List<MirrorPair> activePairs = new List<MirrorPair>();
 
-    // ─────────────────────────────────────────────────────────────
-    // LIFECYCLE
-    // ─────────────────────────────────────────────────────────────
-
-    private void OnEnable()
-    {
-        RebuildMirror();
-    }
-
-    private void OnDisable()
-    {
-        CleanupGhosts();
-    }
+    private void OnEnable() => RebuildMirror();
+    private void OnDisable() => CleanupGhosts();
 
     public void RebuildMirror()
     {
@@ -60,10 +47,8 @@ public class AutoObjectMirror : MonoBehaviour
         if (objectsToMirror == null || objectsToMirror.Count == 0)
             return;
 
-        // Create container INACTIVE so cloned scripts never run Awake()/OnEnable()
         GameObject containerObj = new GameObject(gameObject.name + "_ReflectionSpace");
         containerObj.SetActive(false);
-
         mirrorContainer = containerObj.transform;
         UpdateContainerTransform();
 
@@ -71,7 +56,6 @@ public class AutoObjectMirror : MonoBehaviour
         {
             if (realObj == null || !realObj.scene.IsValid()) continue;
 
-            // Instantiate directly inside the inactive container
             GameObject ghostObj = Instantiate(realObj, mirrorContainer, false);
             ghostObj.name = realObj.name + "_MirrorGhost";
 
@@ -82,19 +66,16 @@ public class AutoObjectMirror : MonoBehaviour
                 realRoot = realObj.transform,
                 ghostRoot = ghostObj.transform,
                 realRenderers = realObj.GetComponentsInChildren<Renderer>(true),
-                ghostRenderers = ghostObj.GetComponentsInChildren<Renderer>(true)
+                ghostRenderers = ghostObj.GetComponentsInChildren<Renderer>(true),
+                realLights = realObj.GetComponentsInChildren<Light>(true),
+                ghostLights = ghostObj.GetComponentsInChildren<Light>(true)
             };
 
-            // Build a recursive 1:1 map of all bones/children to sync animations perfectly
             MapHierarchy(realObj.transform, ghostObj.transform, pair.bonePairs);
-            
             activePairs.Add(pair);
         }
 
-        // Force an immediate sync before activating to prevent 1-frame position glitches
         SyncGhosts();
-
-        // Wake up the visual-only reflection space
         containerObj.SetActive(true);
     }
 
@@ -108,19 +89,11 @@ public class AutoObjectMirror : MonoBehaviour
         activePairs.Clear();
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // MIRROR SYNC (LATE UPDATE)
-    // ─────────────────────────────────────────────────────────────
-
-    private void LateUpdate()
-    {
-        SyncGhosts();
-    }
+    private void LateUpdate() => SyncGhosts();
 
     private void UpdateContainerTransform()
     {
         mirrorContainer.SetPositionAndRotation(transform.position, transform.rotation);
-
         Vector3 scale = Vector3.one;
         scale[(int)normalAxis] = -1f;
         mirrorContainer.localScale = scale;
@@ -131,58 +104,68 @@ public class AutoObjectMirror : MonoBehaviour
         if (mirrorContainer == null || activePairs.Count == 0) return;
 
         UpdateContainerTransform();
-
         Quaternion invMirrorRot = Quaternion.Inverse(transform.rotation);
         Vector3 mirrorPos = transform.position;
+        Vector3 normal = GetWorldNormal();
 
         for (int i = 0; i < activePairs.Count; i++)
         {
             MirrorPair pair = activePairs[i];
-
             if (pair.realRoot == null || pair.ghostRoot == null) continue;
 
-            try
+            bool isRealActive = pair.realRoot.gameObject.activeInHierarchy;
+            if (pair.ghostRoot.gameObject.activeSelf != isRealActive)
+                pair.ghostRoot.gameObject.SetActive(isRealActive);
+
+            // Root transform
+            pair.ghostRoot.localPosition = invMirrorRot * (pair.realRoot.position - mirrorPos);
+            pair.ghostRoot.localRotation = invMirrorRot * pair.realRoot.rotation;
+            pair.ghostRoot.localScale = pair.realRoot.lossyScale;
+
+            // All children / bones
+            for (int n = 1; n < pair.bonePairs.Count; n++)
             {
-                // 1. SYNC ACTIVE STATE
-                bool isRealActive = pair.realRoot.gameObject.activeInHierarchy;
-                if (pair.ghostRoot.gameObject.activeSelf != isRealActive)
-                    pair.ghostRoot.gameObject.SetActive(isRealActive);
+                Transform realNode = pair.bonePairs[n].real;
+                Transform ghostNode = pair.bonePairs[n].ghost;
+                if (realNode == null || ghostNode == null) continue;
 
-                // 2. SYNC ROOT TRANSFORM (Even if inactive, to prevent wrong pop-in positions)
-                pair.ghostRoot.localPosition = invMirrorRot * (pair.realRoot.position - mirrorPos);
-                pair.ghostRoot.localRotation = invMirrorRot * pair.realRoot.rotation;
-                pair.ghostRoot.localScale = pair.realRoot.lossyScale;
+                ghostNode.localPosition = realNode.localPosition;
+                ghostNode.localRotation = realNode.localRotation;
+                ghostNode.localScale = realNode.localScale;
 
-                // 3. SYNC ALL CHILDREN / SKELETON BONES (1:1 Local Pose Copy)
-                // We start at index 1 to skip the root, which was handled above.
-                for (int n = 1; n < pair.bonePairs.Count; n++)
-                {
-                    Transform realNode = pair.bonePairs[n].real;
-                    Transform ghostNode = pair.bonePairs[n].ghost;
-
-                    if (realNode == null || ghostNode == null) continue;
-
-                    ghostNode.localPosition = realNode.localPosition;
-                    ghostNode.localRotation = realNode.localRotation;
-                    ghostNode.localScale = realNode.localScale;
-
-                    if (ghostNode.gameObject.activeSelf != realNode.gameObject.activeSelf)
-                        ghostNode.gameObject.SetActive(realNode.gameObject.activeSelf);
-                }
-
-                // 4. SYNC RENDERER VISIBILITY
-                int rendCount = Mathf.Min(pair.realRenderers.Length, pair.ghostRenderers.Length);
-                for (int r = 0; r < rendCount; r++)
-                {
-                    if (pair.realRenderers[r] != null && pair.ghostRenderers[r] != null)
-                    {
-                        pair.ghostRenderers[r].enabled = pair.realRenderers[r].enabled;
-                    }
-                }
+                if (ghostNode.gameObject.activeSelf != realNode.gameObject.activeSelf)
+                    ghostNode.gameObject.SetActive(realNode.gameObject.activeSelf);
             }
-            catch (Exception e)
+
+            // Renderer visibility
+            int rendCount = Mathf.Min(pair.realRenderers.Length, pair.ghostRenderers.Length);
+            for (int r = 0; r < rendCount; r++)
             {
-                Debug.LogWarning($"[AutoObjectMirror] Error syncing {pair.realRoot.name}: {e.Message}");
+                if (pair.realRenderers[r] != null && pair.ghostRenderers[r] != null)
+                    pair.ghostRenderers[r].enabled = pair.realRenderers[r].enabled;
+            }
+
+            // ─── LIGHTS ──────────────────────────────────────────────
+            // Negative scale mirrors the mesh, but NOT the light direction.
+            // We manually reflect the forward/up vectors to fix spot/point/area lights.
+            int lightCount = Mathf.Min(pair.realLights.Length, pair.ghostLights.Length);
+            for (int l = 0; l < lightCount; l++)
+            {
+                Light realLight = pair.realLights[l];
+                Light ghostLight = pair.ghostLights[l];
+
+                if (realLight == null || ghostLight == null) continue;
+                if (realLight.type == LightType.Directional) continue; // directional lights are stripped anyway
+
+                // Reflect the real light's aim direction
+                Vector3 realForward = realLight.transform.forward;
+                Vector3 reflectedForward = realForward - 2f * Vector3.Dot(realForward, normal) * normal;
+
+                // Reflect the up vector to preserve the light's twist
+                Vector3 realUp = realLight.transform.up;
+                Vector3 reflectedUp = realUp - 2f * Vector3.Dot(realUp, normal) * normal;
+
+                ghostLight.transform.rotation = Quaternion.LookRotation(reflectedForward, reflectedUp);
             }
         }
     }
@@ -190,46 +173,37 @@ public class AutoObjectMirror : MonoBehaviour
     private void MapHierarchy(Transform real, Transform ghost, List<TransformPair> map)
     {
         map.Add(new TransformPair { real = real, ghost = ghost });
-
         int childCount = Mathf.Min(real.childCount, ghost.childCount);
         for (int i = 0; i < childCount; i++)
-        {
             MapHierarchy(real.GetChild(i), ghost.GetChild(i), map);
-        }
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // GHOST PREPARATION & COMPONENT STRIPPING
-    // ─────────────────────────────────────────────────────────────
 
     private void PrepareGhostHierarchy(GameObject ghost)
     {
-        // 1. Reset Tags & Make Dynamic
+        // Reset static, tag, and layer so camera/raycast won't ignore the ghost
         foreach (Transform t in ghost.GetComponentsInChildren<Transform>(true))
         {
             t.gameObject.isStatic = false;
-            
-            // FIX: Remove inherited tags (like "Player") so the camera actually renders the ghost!
-            t.gameObject.layer = LayerMask.NameToLayer("Default"); 
+            t.gameObject.tag = "Untagged";
+            t.gameObject.layer = LayerMask.NameToLayer("Default");
         }
 
-        // 2. Fix Occlusion Culling invisiblity
+        // Prevent occlusion culling and offscreen culling issues
         foreach (Renderer r in ghost.GetComponentsInChildren<Renderer>(true))
         {
-            r.allowOcclusionWhenDynamic = false; // Prevents being culled when behind the mirror wall
-            
+            r.allowOcclusionWhenDynamic = false;
             if (r is SkinnedMeshRenderer smr)
-                smr.updateWhenOffscreen = true; // Prevents negative-scale frustum issues
+                smr.updateWhenOffscreen = true;
         }
 
-        // 3. Clean removal order to prevent Unity console dependency warnings
+        // Remove gameplay components in dependency-safe order
         DestroyComponents<MonoBehaviour>(ghost);
         DestroyComponents<CharacterController>(ghost);
         DestroyComponents<Joint>(ghost);
         DestroyComponents<Collider>(ghost);
         DestroyComponents<Rigidbody>(ghost);
 
-        // 4. General cleanup for anything remaining except visuals
+        // General cleanup: keep visuals + non-directional lights
         Component[] comps = ghost.GetComponentsInChildren<Component>(true);
         for (int i = comps.Length - 1; i >= 0; i--)
         {
@@ -237,7 +211,10 @@ public class AutoObjectMirror : MonoBehaviour
             if (c == null) continue;
 
             if (c is Transform || c is MeshFilter || c is Renderer || c is LODGroup)
-                continue; // Keep visual elements
+                continue;
+
+            if (c is Light light && light.type != LightType.Directional)
+                continue;
 
             DestroyImmediate(c);
         }
@@ -247,14 +224,8 @@ public class AutoObjectMirror : MonoBehaviour
     {
         T[] comps = ghost.GetComponentsInChildren<T>(true);
         for (int i = comps.Length - 1; i >= 0; i--)
-        {
             if (comps[i] != null) DestroyImmediate(comps[i]);
-        }
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // GIZMOS
-    // ─────────────────────────────────────────────────────────────
 
     private Vector3 GetWorldNormal()
     {
@@ -292,7 +263,6 @@ public class AutoObjectMirror : MonoBehaviour
 
             Vector3 realPos = realObj.transform.position;
             Vector3 offset = realPos - mirrorPos;
-
             float dist = Vector3.Dot(offset, n);
             Vector3 planeHit = realPos - (n * dist);
             Vector3 reflectedPos = realPos - (n * 2f * dist);
