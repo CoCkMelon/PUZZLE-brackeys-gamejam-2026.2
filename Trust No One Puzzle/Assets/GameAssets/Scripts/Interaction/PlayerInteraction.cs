@@ -1,3 +1,4 @@
+using GameAssets.Scripts.Puzzle;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -30,6 +31,9 @@ namespace GameAssets.Scripts.Interaction
         // The interactable currently in the crosshair
         private IInteractable _currentTarget;
 
+        // Reusable raycast buffer for DetectInteractable
+        private readonly RaycastHit[] _hits = new RaycastHit[32];
+
         private void OnEnable()
         {
             interactAction.action.Enable();
@@ -53,20 +57,44 @@ namespace GameAssets.Scripts.Interaction
 
         /// <summary>
         /// Casts a ray from the camera and checks for IInteractable on hit objects.
+        /// The ray ignores the item currently being carried (it keeps its colliders
+        /// for physics carrying, so it must not block the crosshair) and behaves
+        /// like a single raycast otherwise: the first other hit decides.
         /// </summary>
         private void DetectInteractable()
         {
-            if (Physics.Raycast(rayOrigin.position, rayOrigin.forward, out RaycastHit hit, interactRange, interactableMask))
+            var carried = PlayerCarry.Instance != null ? PlayerCarry.Instance.HeldItem : null;
+            var count = Physics.RaycastNonAlloc(rayOrigin.position, rayOrigin.forward, _hits, interactRange, interactableMask);
+
+            // Sort the used range by distance (insertion sort, count is tiny).
+            for (var i = 1; i < count; i++)
             {
+                var hit = _hits[i];
+                var j = i - 1;
+                while (j >= 0 && _hits[j].distance > hit.distance)
+                {
+                    _hits[j + 1] = _hits[j];
+                    j--;
+                }
+                _hits[j + 1] = hit;
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                var hit = _hits[i];
+
+                // Never blocked by the item in our own hands.
+                if (carried != null && hit.collider != null && hit.collider.transform.IsChildOf(carried.transform))
+                    continue;
+
                 // Try the hit object first, then walk up to the parent
                 var interactable = hit.collider.GetComponent<IInteractable>()
                                 ?? hit.collider.GetComponentInParent<IInteractable>();
 
-                if (interactable != null && interactable.CanInteract)
-                {
-                    _currentTarget = interactable;
-                    return;
-                }
+                _currentTarget = interactable != null && interactable.CanInteract
+                    ? interactable
+                    : null;
+                return;
             }
 
             _currentTarget = null;
