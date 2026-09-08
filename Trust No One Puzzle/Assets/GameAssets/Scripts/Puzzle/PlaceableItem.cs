@@ -34,9 +34,10 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private Collider[] colliders;
 
         [Header("Carry physics")]
-        [Tooltip("Top speed (m/s) at which this item is steered while carried. Lower = heavier feel.")]
+        [Tooltip("Top speed (m/s) the carry servo aims for while this item is held. The push itself is force-limited " +
+                 "(see PlayerCarry), so a heavier Rigidbody mass = slower, weightier response under the same force.")]
         [SerializeField] private float maxCarrySpeed = 10f;
-        [Tooltip("Top turn rate (deg/s) at which this item is rotated while carried.")]
+        [Tooltip("Top turn rate (deg/s) the carry servo aims for while rotating this item. Torque-limited by PlayerCarry.")]
         [SerializeField] private float maxCarryAngularSpeed = 720f;
 
         [Header("Spatial (boxes)")]
