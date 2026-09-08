@@ -63,6 +63,12 @@ namespace GameAssets.Scripts.Entities.Player
         /// Use this as the origin for pickup and drop raycasts.
         /// </summary>
         public Ray ReticleRay => _camera.ScreenPointToRay(new Vector3(Screen.width * 0.5f, Screen.height * 0.5f));
+
+        /// <summary>
+        /// The object currently held in the player's hands, or null.
+        /// Locks use this to see whether the player is carrying a key.
+        /// </summary>
+        public Interactable CarriedObject => _carriedInteractable;
     
         private void OnEnable()
         {
