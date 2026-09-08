@@ -63,6 +63,23 @@ namespace GameAssets.Scripts.Entities.Player
         /// Use this as the origin for pickup and drop raycasts.
         /// </summary>
         public Ray ReticleRay => _camera.ScreenPointToRay(new Vector3(Screen.width * 0.5f, Screen.height * 0.5f));
+
+        /// <summary>The interactable currently held in front of the camera, or null when the hands are empty.</summary>
+        public Interactable CarriedInteractable => _carriedInteractable;
+
+        /// <summary>
+        /// Lets go of the carried object immediately, without the drop animation or throw impulse.
+        /// Used when the object is taken away by the world, e.g. a key consumed by a lock.
+        /// </summary>
+        public void ReleaseCarriedObject()
+        {
+            if (_carriedInteractable == null && _droppingInteractable == null)
+            {
+                return;
+            }
+
+            ReleaseCarryImmediately();
+        }
     
         private void OnEnable()
         {
