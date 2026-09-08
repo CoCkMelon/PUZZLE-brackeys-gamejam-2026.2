@@ -57,6 +57,25 @@ namespace GameAssets.Scripts.Interaction
         [Tooltip("If true, the object starts locked and requires Unlock() to be called first.")]
         [SerializeField] private bool startsLocked;
 
+        [Tooltip("Allow the player to unlock this by interacting while owning a matching key. " +
+                 "Off = only script / UnityEvent calls to Unlock() open the lock.")]
+        [SerializeField] private bool unlockWithKey = true;
+
+        [Tooltip("Key id that fits this lock (must match KeyItem.keyId). Leave empty to accept any key.")]
+        [SerializeField] private string requiredKeyId = "";
+
+        [Tooltip("Where the key may come from: the player's hands, the collected key ring, or either.")]
+        [SerializeField] private KeyAccess keyAccess = KeyAccess.HeldOrKeyRing;
+
+        [Tooltip("Spend the key when it opens this lock (only affects keys marked Consumed On Use).")]
+        [SerializeField] private bool consumeKeyOnUnlock = true;
+
+        [Tooltip("Open immediately in the same interaction that unlocks it.")]
+        [SerializeField] private bool openOnUnlock = true;
+
+        [Tooltip("Lock again every time the object is closed (the key is needed each time).")]
+        [SerializeField] private bool relockOnClose;
+
         [Header("Audio (Optional)")]
         [Tooltip("AudioSource for playing interaction sounds. If null, no sound plays.")]
         [SerializeField] private AudioSource audioSource;
@@ -70,6 +89,9 @@ namespace GameAssets.Scripts.Interaction
         [Tooltip("Sound played when the player tries to interact while locked.")]
         [SerializeField] private AudioClip lockedSound;
 
+        [Tooltip("Sound played when a key unlocks the object.")]
+        [SerializeField] private AudioClip unlockSound;
+
         [Header("Events")]
         [Tooltip("Fired when the object finishes opening.")]
         public UnityEvent OnOpened;
@@ -79,6 +101,9 @@ namespace GameAssets.Scripts.Interaction
 
         [Tooltip("Fired when the player tries to interact but the object is locked.")]
         public UnityEvent OnLockedAttempt;
+
+        [Tooltip("Fired when the object is unlocked (by key or by script).")]
+        public UnityEvent OnUnlocked;
 
         // ─────────────────────────────────────────────
         //  Runtime State
@@ -102,8 +127,16 @@ namespace GameAssets.Scripts.Interaction
         {
             get
             {
-                if (_isLocked) return "Locked [Need Key]";
                 if (_isAnimating) return "";
+
+                if (_isLocked)
+                {
+                    if (unlockWithKey && KeyItem.PlayerHasKey(requiredKeyId, keyAccess))
+                        return $"Press [E] to Unlock with {KeyItem.DescribeKey(requiredKeyId, keyAccess)}";
+
+                    return "Locked [Need Key]";
+                }
+
                 return _isOpen ? "Press [E] to Close" : "Press [E] to Open";
             }
         }
@@ -118,8 +151,7 @@ namespace GameAssets.Scripts.Interaction
 
             if (_isLocked)
             {
-                PlaySound(lockedSound);
-                OnLockedAttempt?.Invoke();
+                TryUnlockWithKey();
                 return;
             }
 
@@ -190,8 +222,43 @@ namespace GameAssets.Scripts.Interaction
         /// <summary>Unlocks the object so the player can interact.</summary>
         public void Unlock()
         {
+            if (!_isLocked) return;
+
             _isLocked = false;
+            PlaySound(unlockSound);
+            OnUnlocked?.Invoke();
         }
+
+        /// <summary>
+        /// Tries to unlock with a key the player owns (held or on the key ring).
+        /// Returns true when a matching key was found; otherwise plays the locked
+        /// feedback. Safe to call from UnityEvents.
+        /// </summary>
+        public bool TryUnlockWithKey()
+        {
+            if (!_isLocked) return true;
+
+            if (unlockWithKey &&
+                KeyItem.TryUseKey(requiredKeyId, keyAccess, consumeKeyOnUnlock, out _))
+            {
+                _isLocked = false;
+                PlaySound(unlockSound);
+                OnUnlocked?.Invoke();
+
+                if (openOnUnlock && !_isOpen)
+                    Open();
+
+                return true;
+            }
+
+            PlaySound(lockedSound);
+            OnLockedAttempt?.Invoke();
+            return false;
+        }
+
+        /// <summary>True when the player owns a key that fits this lock right now.</summary>
+        public bool PlayerHasMatchingKey() =>
+            unlockWithKey && KeyItem.PlayerHasKey(requiredKeyId, keyAccess);
 
         /// <summary>Locks the object. If currently open, force-closes it.</summary>
         public void Lock()
@@ -247,9 +314,16 @@ namespace GameAssets.Scripts.Interaction
             _animationCoroutine = null;
 
             if (opening)
+            {
                 OnOpened?.Invoke();
+            }
             else
+            {
+                if (relockOnClose)
+                    _isLocked = true;
+
                 OnClosed?.Invoke();
+            }
         }
 
         private void StopCurrentAnimation()

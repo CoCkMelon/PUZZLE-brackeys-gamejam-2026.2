@@ -81,7 +81,55 @@ On a manager object (or on the furniture root):
 
 Those drawers must have `OpenableInteractable.startsLocked = true`. Unlock is `OpenableInteractable.Unlock()`.
 
-## 5. Wrong hint system
+## 5. Keys and locked furniture
+
+Any lockable script (`OpenableFurniture`, `OpenableInteractable`, `ToolBoxInteractable`)
+can now be opened with a key instead of only by a puzzle event.
+
+### The key prop
+
+On the key object (works with **both** carry systems — `PlaceableItem` physics
+carry and the old `Interactable` + `FPPCameraController` carry):
+
+- Add `KeyItem`
+  - `Key Id` — e.g. `toolbox_key` (a lock with an empty required id accepts any key)
+  - `Display Name` — shown in the prompt: *"Press E To Unlock with Brass Key"*
+  - `Collect On Pickup` — adds the id to the global `KeyRing` the moment the player
+    picks it up, so the drawer can still be opened after the key was put down
+  - `Consumed On Use` — single-use key
+  - `Consume Behaviour` — `Destroy` / `Disable` / `KeepInWorld`
+
+### The lock
+
+On the furniture:
+
+| Field | Meaning |
+| --- | --- |
+| `Starts Locked` | begins locked |
+| `Unlock With Key` | player can unlock it by interacting while owning a key (off = script-only lock, same as before) |
+| `Required Key Id` | must match `KeyItem.keyId`; empty = any key |
+| `Key Access` | `HeldItemOnly` (must be in hands) / `KeyRingOnly` (must have been collected) / `HeldOrKeyRing` |
+| `Consume Key On Unlock` | spends single-use keys |
+| `Open On Unlock` | the unlocking press also opens it |
+| `Relock On Close` | needs the key again every time |
+
+Events: `OnUnlocked`, `OnLockedAttempt`, `OnOpened`, `OnClosed`, plus optional
+`unlockSound` / `lockedSound`.
+
+Script / UnityEvent API is unchanged: `Unlock()`, `Lock()`, `Open()`, `Close()`,
+and the new `TryUnlockWithKey()` / `PlayerHasMatchingKey()`.
+`DrawerUnlockTrigger` still works — puzzle unlocking and key unlocking can be
+mixed on the same drawer.
+
+Anything else can ask the global ring directly:
+
+```csharp
+KeyRing.Has("toolbox_key");     // owned?
+KeyRing.Add("toolbox_key");     // grant from a cutscene / dialogue
+KeyRing.Consume("toolbox_key"); // spend
+```
+
+## 6. Wrong hint system
 
 On the same object as `DialogueManager` / Mobile UI:
 
@@ -100,6 +148,31 @@ On the same object as `DialogueManager` / Mobile UI:
 Wrong placements also roll a random misleading hint (`Wrong Hint Chance`).
 
 `DialogueManager.SendChatMessage` is used automatically if a manager exists in the scene.
+
+## Carry physics: no penetration
+
+`PlayerCarry` keeps the carried body fully simulated (never kinematic, never
+parented) and adds three guards so items cannot sink into colliders:
+
+1. **Damped follow servo** (`Follow Time`, `Rotation Follow Time`) — the servo
+   closes the gap over time instead of demanding a one-step jump, so the requested
+   motion is always something the solver can resolve.
+2. **Shape sweep** (`Sweep Against Geometry`, `Contact Skin`, `Obstruction Mask`) —
+   the body is swept along its requested motion each `FixedUpdate` and only the
+   component pointing *into* the first blocking surface is cancelled. The
+   tangential part survives, so items slide along walls instead of stopping dead.
+3. **Depenetration pass** (`Resolve Overlaps`, `Depenetration Speed`) —
+   `Physics.ComputePenetration` eases an item that is already intersecting
+   something back out at a limited speed instead of firing it across the room.
+
+`PlaceableItem` additionally raises solver iterations, caps
+`maxDepenetrationVelocity` and lifts `maxAngularVelocity` while an item is held,
+and restores every one of those values on release. Rotation is damped to 25% while
+the item is in contact (turning a pressed-in object is the classic way to force it
+through a wall).
+
+`Drop When Stuck` can be turned off if you would rather have the item stay pressed
+against the obstacle than be released automatically.
 
 ## Example flow
 

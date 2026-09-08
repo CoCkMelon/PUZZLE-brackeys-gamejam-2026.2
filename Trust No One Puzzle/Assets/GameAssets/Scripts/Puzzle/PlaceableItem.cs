@@ -39,6 +39,17 @@ namespace GameAssets.Scripts.Puzzle
         [Tooltip("Top turn rate (deg/s) at which this item is rotated while carried.")]
         [SerializeField] private float maxCarryAngularSpeed = 720f;
 
+        [Tooltip("Solver iteration count used while carried. Higher = contacts against walls " +
+                 "are resolved harder, so the item does not sink into geometry.")]
+        [SerializeField, Min(1)] private int carrySolverIterations = 16;
+
+        [Tooltip("Velocity iteration count used while carried.")]
+        [SerializeField, Min(1)] private int carrySolverVelocityIterations = 8;
+
+        [Tooltip("How fast PhysX may push the item out of something it overlaps (m/s). " +
+                 "Low values stop wedged items from being launched across the room.")]
+        [SerializeField, Min(0.1f)] private float carryMaxDepenetrationSpeed = 1.5f;
+
         [Header("Spatial (boxes)")]
         [SerializeField] private float defaultHoldDistance = 1.6f;
         [SerializeField] private float minHoldDistance = 0.6f;
@@ -53,6 +64,24 @@ namespace GameAssets.Scripts.Puzzle
         public float MaxHoldDistance => maxHoldDistance;
         public float MaxCarrySpeed => maxCarrySpeed;
         public float MaxCarryAngularSpeed => maxCarryAngularSpeed;
+
+        /// <summary>Colliders that make up this item (used for sweeps and overlap tests).</summary>
+        public Collider[] Colliders => colliders ?? System.Array.Empty<Collider>();
+
+        /// <summary>
+        /// Thickness of the item's thinnest axis, in metres. The carry code caps
+        /// the per-step movement with it so a thin object can never step past a
+        /// collider between two physics ticks.
+        /// </summary>
+        public float SmallestColliderThickness
+        {
+            get
+            {
+                if (_smallestThickness <= 0f)
+                    _smallestThickness = ComputeSmallestThickness();
+                return _smallestThickness;
+            }
+        }
         public bool UsesSpatialCarry => carryStyle == CarryStyle.Spatial;
         public bool RotateWithHolder => carryStyle == CarryStyle.Handheld;
 
@@ -63,6 +92,11 @@ namespace GameAssets.Scripts.Puzzle
         private readonly List<Collider> _ignoredCarrierColliders = new List<Collider>();
         private RigidbodyInterpolation _savedInterpolation = RigidbodyInterpolation.None;
         private CollisionDetectionMode _savedCollisionDetection = CollisionDetectionMode.Discrete;
+        private float _savedMaxDepenetrationVelocity = -1f;
+        private float _savedMaxAngularVelocity = -1f;
+        private int _savedSolverIterations = -1;
+        private int _savedSolverVelocityIterations = -1;
+        private float _smallestThickness = -1f;
 
         public string InteractionPrompt => IsHeld ? "" : $"Press [E] to Pick Up {DisplayName}";
         public bool CanInteract => !IsHeld && OccupyingSlot == null;
@@ -104,6 +138,10 @@ namespace GameAssets.Scripts.Puzzle
                 {
                     _savedInterpolation = body.interpolation;
                     _savedCollisionDetection = body.collisionDetectionMode;
+                    _savedMaxDepenetrationVelocity = body.maxDepenetrationVelocity;
+                    _savedMaxAngularVelocity = body.maxAngularVelocity;
+                    _savedSolverIterations = body.solverIterations;
+                    _savedSolverVelocityIterations = body.solverVelocityIterations;
 
                     // The heart of the physics carry: the body stays fully
                     // simulated. PlayerCarry only writes its velocity, so all
@@ -115,6 +153,22 @@ namespace GameAssets.Scripts.Puzzle
                     // Continuous collision keeps even fast carries from
                     // tunnelling through thin walls.
                     body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+
+                    // Contacts win over the carry servo: more solver iterations
+                    // keep the item on the surface of a wall instead of letting
+                    // the driven velocity push it inside, and the capped
+                    // depenetration speed stops wedged items from exploding out.
+                    body.solverIterations = Mathf.Max(_savedSolverIterations, carrySolverIterations);
+                    body.solverVelocityIterations =
+                        Mathf.Max(_savedSolverVelocityIterations, carrySolverVelocityIterations);
+                    body.maxDepenetrationVelocity = carryMaxDepenetrationSpeed;
+
+                    // Unity clamps angular velocity to 7 rad/s by default, which
+                    // silently fights the carry rotation servo.
+                    body.maxAngularVelocity = Mathf.Max(
+                        _savedMaxAngularVelocity,
+                        maxCarryAngularSpeed * Mathf.Deg2Rad);
+
                     body.WakeUp();
                 }
                 else
@@ -219,6 +273,44 @@ namespace GameAssets.Scripts.Puzzle
             body.useGravity = true;
             body.interpolation = _savedInterpolation;
             body.collisionDetectionMode = _savedCollisionDetection;
+
+            if (_savedMaxDepenetrationVelocity >= 0f)
+                body.maxDepenetrationVelocity = _savedMaxDepenetrationVelocity;
+            if (_savedMaxAngularVelocity >= 0f)
+                body.maxAngularVelocity = _savedMaxAngularVelocity;
+            if (_savedSolverIterations > 0)
+                body.solverIterations = _savedSolverIterations;
+            if (_savedSolverVelocityIterations > 0)
+                body.solverVelocityIterations = _savedSolverVelocityIterations;
+        }
+
+        /// <summary>Smallest world-space dimension of the item's combined bounds.</summary>
+        private float ComputeSmallestThickness()
+        {
+            var found = false;
+            var bounds = new Bounds(transform.position, Vector3.zero);
+
+            foreach (var c in Colliders)
+            {
+                if (c == null)
+                    continue;
+
+                if (!found)
+                {
+                    bounds = c.bounds;
+                    found = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(c.bounds);
+                }
+            }
+
+            if (!found)
+                return 0.1f;
+
+            var size = bounds.size;
+            return Mathf.Max(0.02f, Mathf.Min(size.x, Mathf.Min(size.y, size.z)));
         }
 
         private void SetCarrierCollisionIgnored(bool ignore, Collider[] carrierColliders)

@@ -39,6 +39,21 @@ namespace GameAssets.Scripts.Interaction
         [Tooltip("If true, the toolbox starts locked and requires UnlockToolBox() to be called first.")]
         [SerializeField] private bool startsLocked = true;
 
+        [Tooltip("Allow the player to unlock the toolbox by interacting while owning a matching key.")]
+        [SerializeField] private bool unlockWithKey = true;
+
+        [Tooltip("Key id that fits this lock (must match KeyItem.keyId). Leave empty to accept any key.")]
+        [SerializeField] private string requiredKeyId = "";
+
+        [Tooltip("Where the key may come from: the player's hands, the collected key ring, or either.")]
+        [SerializeField] private KeyAccess keyAccess = KeyAccess.HeldOrKeyRing;
+
+        [Tooltip("Spend the key when it opens this lock (only affects keys marked Consumed On Use).")]
+        [SerializeField] private bool consumeKeyOnUnlock = true;
+
+        [Tooltip("Open the lid immediately in the same interaction that unlocks it.")]
+        [SerializeField] private bool openOnUnlock = true;
+
         [Header("Audio")]
         [Tooltip("AudioSource for playing open/close sounds. If null, no sound plays.")]
         [SerializeField] private AudioSource audioSource;
@@ -52,6 +67,9 @@ namespace GameAssets.Scripts.Interaction
         [Tooltip("Sound played when the player tries to open a locked toolbox.")]
         [SerializeField] private AudioClip lockedSound;
 
+        [Tooltip("Sound played when a key unlocks the toolbox.")]
+        [SerializeField] private AudioClip unlockSound;
+
         [Header("Events")]
         [Tooltip("Fired when the toolbox finishes opening.")]
         public UnityEvent OnOpened;
@@ -61,6 +79,9 @@ namespace GameAssets.Scripts.Interaction
 
         [Tooltip("Fired when the player tries to interact but the toolbox is locked.")]
         public UnityEvent OnLockedAttempt;
+
+        [Tooltip("Fired when the toolbox is unlocked (by key or by script).")]
+        public UnityEvent OnUnlocked;
 
         // State
         private bool _isOpen;
@@ -75,8 +96,16 @@ namespace GameAssets.Scripts.Interaction
         {
             get
             {
-                if (_isLocked) return "Locked [Need Key]";
                 if (_isAnimating) return "";
+
+                if (_isLocked)
+                {
+                    if (unlockWithKey && KeyItem.PlayerHasKey(requiredKeyId, keyAccess))
+                        return $"Press [E] to Unlock with {KeyItem.DescribeKey(requiredKeyId, keyAccess)}";
+
+                    return "Locked [Need Key]";
+                }
+
                 return _isOpen ? "Press [E] to Close" : "Press [E] to Open";
             }
         }
@@ -106,11 +135,9 @@ namespace GameAssets.Scripts.Interaction
 
             if (_isLocked)
             {
-                PlaySound(lockedSound);
-                OnLockedAttempt?.Invoke();
+                TryUnlockWithKey();
                 return;
             }
-
 
             // Toggle open/close
             if (_isOpen)
@@ -147,8 +174,43 @@ namespace GameAssets.Scripts.Interaction
         /// </summary>
         public void UnlockToolBox()
         {
+            if (!_isLocked) return;
+
             _isLocked = false;
+            PlaySound(unlockSound);
+            OnUnlocked?.Invoke();
         }
+
+        /// <summary>
+        /// Tries to unlock with a key the player owns (carried or already collected
+        /// into the <see cref="KeyRing"/>). Returns true when a matching key was
+        /// found, otherwise plays the locked feedback.
+        /// </summary>
+        public bool TryUnlockWithKey()
+        {
+            if (!_isLocked) return true;
+
+            if (unlockWithKey &&
+                KeyItem.TryUseKey(requiredKeyId, keyAccess, consumeKeyOnUnlock, out _))
+            {
+                _isLocked = false;
+                PlaySound(unlockSound);
+                OnUnlocked?.Invoke();
+
+                if (openOnUnlock && !_isOpen)
+                    Open();
+
+                return true;
+            }
+
+            PlaySound(lockedSound);
+            OnLockedAttempt?.Invoke();
+            return false;
+        }
+
+        /// <summary>True when the player owns a key that fits this lock right now.</summary>
+        public bool PlayerHasMatchingKey() =>
+            unlockWithKey && KeyItem.PlayerHasKey(requiredKeyId, keyAccess);
 
         /// <summary>
         /// Locks the toolbox (e.g. after the lights-out sequence changes things).

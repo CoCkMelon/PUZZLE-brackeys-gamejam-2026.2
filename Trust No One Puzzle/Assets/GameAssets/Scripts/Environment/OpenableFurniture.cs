@@ -129,6 +129,8 @@ namespace GameAssets.Scripts.Environment
             _openPosition = _closedPosition + openOffset;
             _isLocked = startsLocked;
 
+            _isLocked = startsLocked;
+
             if (playerCameraController == null)
             {
                 playerCameraController = FindFirstObjectByType<FPPCameraController>();
@@ -144,16 +146,100 @@ namespace GameAssets.Scripts.Environment
             var isTargeted = IsTargetedByReticle();
             SetPromptVisible(isTargeted);
 
-            if (isTargeted)
+            if (!isTargeted)
             {
-                UpdatePromptText();
+                return;
+            }
 
-                if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
+            UpdatePromptText();
+
+            if (Keyboard.current != null && Keyboard.current[interactKey].wasPressedThisFrame)
+            {
+                Interact();
+                UpdatePromptText();
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        //  Public API
+        // ─────────────────────────────────────────────
+
+        /// <summary>
+        /// Same thing the reticle interaction does: unlock with a key if needed,
+        /// otherwise toggle open/closed. Safe to call from UnityEvents.
+        /// </summary>
+        public void Interact()
+        {
+            if (_isLocked)
+            {
+                TryUnlockWithKey();
+                return;
+            }
+
+            SetOpen(!_isOpen);
+        }
+
+        /// <summary>Opens the furniture (does nothing while locked).</summary>
+        public void Open() => SetOpen(true);
+
+        /// <summary>Closes the furniture.</summary>
+        public void Close() => SetOpen(false);
+
+        /// <summary>Unlocks without needing a key (puzzle solved, script, UnityEvent).</summary>
+        public void Unlock()
+        {
+            if (!_isLocked)
+            {
+                return;
+            }
+
+            _isLocked = false;
+            PlaySound(unlockSound);
+            OnUnlocked?.Invoke();
+        }
+
+        /// <summary>Locks the furniture. Closes it first if it is open.</summary>
+        public void Lock()
+        {
+            _isLocked = true;
+
+            if (_isOpen)
+            {
+                SetOpen(false);
+            }
+        }
+
+        /// <summary>
+        /// Attempts the key unlock explicitly. Returns true when a matching key
+        /// was found. Plays the locked sound and fires <see cref="OnLockedAttempt"/>
+        /// when the player has no key.
+        /// </summary>
+        public bool TryUnlockWithKey()
+        {
+            if (!_isLocked)
+            {
+                return true;
+            }
+
+            if (unlockWithKey &&
+                KeyItem.TryUseKey(requiredKeyId, keyAccess, consumeKeyOnUnlock, out _))
+            {
+                _isLocked = false;
+                PlaySound(unlockSound);
+                OnUnlocked?.Invoke();
+
+                if (openOnUnlock && !_isOpen)
                 {
                     Interact();
                     UpdatePromptText();
                 }
+
+                return true;
             }
+
+            PlaySound(lockedSound);
+            OnLockedAttempt?.Invoke();
+            return false;
         }
 
         // ─────────────────────────────────────────────
@@ -412,10 +498,30 @@ namespace GameAssets.Scripts.Environment
 
         private void UpdatePromptText()
         {
-            if (interactionPrompt != null)
+            if (interactionPrompt == null)
             {
                 interactionPrompt.text = PromptText;
             }
+
+            interactionPrompt.text = BuildPromptText();
+        }
+
+        private string BuildPromptText()
+        {
+            var keyName = interactKey.ToString().ToUpperInvariant();
+
+            if (_isLocked)
+            {
+                if (unlockWithKey && KeyItem.PlayerHasKey(requiredKeyId, keyAccess))
+                {
+                    return string.Format(unlockPromptText, keyName,
+                        KeyItem.DescribeKey(requiredKeyId, keyAccess));
+                }
+
+                return lockedPromptText;
+            }
+
+            return string.Format(_isOpen ? closePromptText : openPromptText, keyName);
         }
 
         private void SetPromptVisible(bool visible)
