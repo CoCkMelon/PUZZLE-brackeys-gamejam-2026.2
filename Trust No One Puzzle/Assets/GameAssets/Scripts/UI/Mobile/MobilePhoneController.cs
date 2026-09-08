@@ -66,7 +66,7 @@ namespace GameAssets.Scripts.UI.Mobile
                 toggleAction.action.started -= OnToggle;
                 toggleAction.action.Disable();
             }
-            if (_holdingCursor)
+            //if (_holdingCursor)
                 ReleaseCursor();
         }
 
