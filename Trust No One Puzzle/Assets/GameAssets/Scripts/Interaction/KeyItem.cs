@@ -250,7 +250,7 @@ namespace GameAssets.Scripts.Interaction
             if (_cachedFppController == null)
                 _cachedFppController = Object.FindFirstObjectByType<FPPCameraController>();
 
-            return _cachedFppController != null ? _cachedFppController.CarriedObject : null;
+            return _cachedFppController != null ? _cachedFppController.CarriedInteractable : null;
         }
     }
 }

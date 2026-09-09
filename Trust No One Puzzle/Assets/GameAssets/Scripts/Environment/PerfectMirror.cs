@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 [DefaultExecutionOrder(10000)]
-public class AutoObjectMirror : MonoBehaviour
+public class PerfectMirror : MonoBehaviour
 {
     public enum MirrorAxis { X = 0, Y = 1, Z = 2 }
 
