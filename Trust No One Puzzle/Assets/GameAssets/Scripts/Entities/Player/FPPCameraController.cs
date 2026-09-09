@@ -5,14 +5,20 @@ using TMPro;
 
 namespace GameAssets.Scripts.Entities.Player
 {
+    /// <summary>
+    /// FPP camera + physics-based carry that never disables colliders.
+    /// Uses bounded force/torque so carried item can never be pushed through geometry.
+    /// LMB releases without throw (as requested), G also releases, RMB throws.
+    /// Supports scroll wheel distance and MMB plane shove (like PlayerCarry spatial).
+    /// </summary>
     public class FPPCameraController : MonoBehaviour
     {
         [Header("Input Actions")]
         [SerializeField] private InputActionReference lookAction;
 
         [Header("Camera settings")] 
-        [SerializeField] private float sensitivity;
-        [SerializeField] private Vector2 pitchLimits;
+        [SerializeField] private float sensitivity = 2f;
+        [SerializeField] private Vector2 pitchLimits = new Vector2(-89f, 89f);
 
         [Header("Reticle")]
         [SerializeField] private bool showReticle = true;
@@ -31,28 +37,37 @@ namespace GameAssets.Scripts.Entities.Player
         [SerializeField] private TMP_FontAsset nameLabelFont;
         [SerializeField, Min(0f)] private float nameLabelOffset = 24f;
 
-        [Header("Carry")]
+        [Header("Carry - Basic")]
         [SerializeField] private Key interactKey = Key.E;
         [SerializeField] private Key dropKey = Key.G;
-        [SerializeField] private Transform carryLocation;
+        [SerializeField] private Transform carryLocation; // legacy hold point, kept for compatibility
+        [SerializeField] private Transform playerBody; // for yaw lock and planar shove
+        [SerializeField] private Camera viewCamera;
         [SerializeField, Range(0.05f, 1f)] private float carriedScaleMultiplier = 0.65f;
         [SerializeField, Min(0f)] private float carryLerpSpeed = 12f;
         [SerializeField, Min(0f)] private float throwForce = 15f;
 
-        [Header("Carry Physics - Penetration Guard")]
-        [Tooltip("Time for the item to catch up with hold pose. Higher = softer, easier for solver to keep out of walls.")]
-        [SerializeField, Min(0.01f)] private float followTime = 0.06f;
-        [SerializeField, Min(0.01f)] private float rotationFollowTime = 0.05f;
-        [SerializeField] private bool sweepAgainstGeometry = true;
-        [SerializeField, Min(0.001f)] private float contactSkin = 0.02f;
-        [SerializeField] private bool resolveOverlaps = true;
-        [SerializeField, Min(0.1f)] private float depenetrationSpeed = 1.5f;
-        [SerializeField, Min(1)] private int carrySolverIterations = 16;
-        [SerializeField, Min(1)] private int carrySolverVelocityIterations = 8;
-        [SerializeField, Min(0.1f)] private float carryMaxDepenetration = 1.5f;
+        [Header("Carry - Force limits (prevents penetration)")]
+        [Tooltip("Strongest push (N) the carry can apply. This is also max force item can press against wall, so keep low enough that nothing gets shoved through geometry.")]
+        [SerializeField, Min(1f)] private float maxCarryForce = 300f;
+        [SerializeField, Min(0.1f)] private float maxCarryTorque = 30f;
+        [SerializeField, Min(1f)] private float maxCarryAcceleration = 60f;
+        [SerializeField, Min(1f)] private float maxCarryAngularAcceleration = 120f;
+        [SerializeField, Min(0f)] private float carryDamping = 1f;
+        [SerializeField, Min(0f)] private float maxReleaseSpeed = 3f;
         [SerializeField] private float maxCarrySpeed = 10f;
         [SerializeField] private float maxCarryAngularSpeed = 720f;
 
+        [Header("Carry - Spatial (lost code from SETUP.md)")]
+        [Tooltip("Scroll wheel changes hold distance (like PlayerCarry spatial)")]
+        [SerializeField] private float scrollMetersPerNotch = 0.35f;
+        [SerializeField] private float minHoldDistance = 0.6f;
+        [SerializeField] private float maxHoldDistance = 4f;
+        [SerializeField] private float defaultHoldDistance = 1.6f;
+        [SerializeField] private float planeDragSensitivity = 0.008f;
+        [SerializeField] private bool spatialModeRequiresMMB = true;
+
+        // Runtime
         private Vector2 _input;
         private float _pitch, _yaw;
         private Camera _camera;
@@ -69,7 +84,7 @@ namespace GameAssets.Scripts.Entities.Player
         private Vector3 _carriedOriginalScale;
         private Vector3 _dropTargetPosition;
 
-        // Saved physics state for restoration
+        // Physics save
         private RigidbodyInterpolation _savedInterpolation;
         private CollisionDetectionMode _savedCollisionDetection;
         private float _savedMaxDepenetrationVelocity = -1f;
@@ -78,24 +93,45 @@ namespace GameAssets.Scripts.Entities.Player
         private int _savedSolverVelocityIterations = -1;
         private bool _savedWasKinematic;
         private bool _savedUseGravity;
+        private float _savedLinearDamping;
+        private float _savedAngularDamping;
+        private Rigidbody _tunedBody;
 
-        private float _smallestThickness = -1f;
+        // Spatial state
+        private float _holdDistance;
+        private Vector3 _planarOffset;
+        private Quaternion _yawOffsetFromPlayer;
+        private Vector3 _previousTargetPos;
+        private Vector3 _targetVelocity;
+        private bool _hasPreviousTarget;
+        private bool _spatialModeActive;
+        private bool _hudSpatialHeld;
+
         private Collider[] _playerColliders;
-        private readonly Collider[] _overlapBuffer = new Collider[32];
         private readonly System.Collections.Generic.List<Collider> _ignoredCarrierColliders = new System.Collections.Generic.List<Collider>();
 
         public Ray ReticleRay => _camera.ScreenPointToRay(new Vector3(Screen.width * 0.5f, Screen.height * 0.5f));
         public Interactable CarriedInteractable => _carriedInteractable;
+        public bool IsCarrying => _carriedInteractable != null;
+        public bool SpatialModeActive => _spatialModeActive;
 
         public void ReleaseCarriedObject()
         {
             if (_carriedInteractable == null && _droppingInteractable == null) return;
             ReleaseCarryImmediately();
         }
-    
+
+        public void SetSpatialModeFromHud(bool held)
+        {
+            _hudSpatialHeld = held;
+            RefreshSpatialMode();
+        }
+
         private void OnEnable()
         {
             _camera = GetComponentInChildren<Camera>();
+            if (viewCamera == null) viewCamera = _camera;
+            if (playerBody == null) playerBody = GetComponentInParent<CharacterController>() != null ? GetComponentInParent<CharacterController>().transform : transform;
             _playerCharacterController = GetComponentInParent<CharacterController>();
             CreateTargetHighlight();
             if (lookAction != null)
@@ -135,7 +171,9 @@ namespace GameAssets.Scripts.Entities.Player
         {
             RotationHandler();
             HandleInteraction();
-            UpdateTargetHighlight(); // highlight + scale lerp + dropping lerp (non-physics part)
+            UpdateTargetHighlight();
+            if (IsCarrying)
+                UpdateSpatialInput();
         }
 
         private void FixedUpdate()
@@ -174,11 +212,7 @@ namespace GameAssets.Scripts.Entities.Player
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.overrideSorting = true;
             canvas.sortingOrder = 100;
-            if (nameLabelFont == null)
-            {
-                Debug.LogWarning("Assign a TextMesh Pro font to Name Label Font on FPPCameraController.", this);
-                return;
-            }
+            if (nameLabelFont == null) return;
             var labelObject = new GameObject("Target Name", typeof(RectTransform), typeof(TextMeshProUGUI));
             labelObject.transform.SetParent(_highlightCanvas.transform, false);
             _targetNameLabel = labelObject.GetComponent<TextMeshProUGUI>();
@@ -192,10 +226,8 @@ namespace GameAssets.Scripts.Entities.Player
 
         private void UpdateTargetHighlight()
         {
-            // Scale lerp is visual, keep in Update
             if (_carriedInteractable != null)
             {
-                // Scale towards carried scale
                 var t = _carriedInteractable.transform;
                 var lerpFactor = 1f - Mathf.Exp(-carryLerpSpeed * Time.deltaTime);
                 t.localScale = Vector3.Lerp(t.localScale, _carriedOriginalScale * carriedScaleMultiplier, lerpFactor);
@@ -203,7 +235,6 @@ namespace GameAssets.Scripts.Entities.Player
                 SetHighlightVisible(false);
                 return;
             }
-
             if (_droppingInteractable != null)
             {
                 var t = _droppingInteractable.transform;
@@ -213,22 +244,18 @@ namespace GameAssets.Scripts.Entities.Player
                 SetHighlightVisible(false);
                 return;
             }
-
-            if (!TryGetTargetedInteractable(out _, out var interactable) ||
-                !TryGetScreenBounds(interactable, out var screenBounds))
+            if (!TryGetTargetedInteractable(out _, out var interactable) || !TryGetScreenBounds(interactable, out var screenBounds))
             {
                 ClearHologramHighlight();
                 SetHighlightVisible(false);
                 return;
             }
-
             ApplyHologramHighlight(interactable);
             if (_targetNameLabel != null)
             {
                 var labelTransform = _targetNameLabel.rectTransform;
                 labelTransform.anchorMin = labelTransform.anchorMax = new Vector2(0.5f, 0.5f);
-                labelTransform.anchoredPosition = new Vector2(screenBounds.center.x, screenBounds.yMax + nameLabelOffset) -
-                                                new Vector2(Screen.width, Screen.height) * 0.5f;
+                labelTransform.anchoredPosition = new Vector2(screenBounds.center.x, screenBounds.yMax + nameLabelOffset) - new Vector2(Screen.width, Screen.height) * 0.5f;
                 labelTransform.sizeDelta = new Vector2(Mathf.Max(200f, screenBounds.width), 40f);
                 _targetNameLabel.text = interactable.DisplayName;
             }
@@ -237,19 +264,33 @@ namespace GameAssets.Scripts.Entities.Player
 
         private void HandleInteraction()
         {
-            if (Keyboard.current == null || _droppingInteractable != null) return;
+            if (Keyboard.current == null) return;
+            if (_droppingInteractable != null) return;
 
             if (_carriedInteractable != null)
             {
+                // LMB now RELEASES without throwing (requested)
+                if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+                {
+                    BeginDrop(); // release
+                    return;
+                }
+                // G also releases
                 if (Keyboard.current[dropKey].wasPressedThisFrame)
+                {
                     BeginDrop();
-                else if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+                    return;
+                }
+                // RMB throws (optional, keep throw functionality)
+                if (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame)
+                {
                     ThrowCarriedObject();
+                    return;
+                }
                 return;
             }
 
             if (!Keyboard.current[interactKey].wasPressedThisFrame) return;
-
             if (TryGetTargetedInteractable(out _, out var interactable))
                 PickUpObject(interactable);
         }
@@ -271,12 +312,9 @@ namespace GameAssets.Scripts.Entities.Player
             _carriedRigidbody = interactable.GetComponentInChildren<Rigidbody>();
             _carriedOriginalScale = interactable.transform.localScale;
             _carriedColliders = interactable.GetComponentsInChildren<Collider>(true);
-            _smallestThickness = -1f; // recompute
 
-            // Ensure we have a rigidbody for physics carry
             if (_carriedRigidbody == null)
             {
-                // Create one like PlaceableItem does - make mesh colliders convex
                 foreach (var c in _carriedColliders)
                 {
                     if (c is MeshCollider mesh && !mesh.convex)
@@ -288,7 +326,7 @@ namespace GameAssets.Scripts.Entities.Player
                 _carriedRigidbody = interactable.gameObject.AddComponent<Rigidbody>();
             }
 
-            // Save original physics settings
+            // Save physics
             _savedInterpolation = _carriedRigidbody.interpolation;
             _savedCollisionDetection = _carriedRigidbody.collisionDetectionMode;
             _savedMaxDepenetrationVelocity = _carriedRigidbody.maxDepenetrationVelocity;
@@ -297,71 +335,183 @@ namespace GameAssets.Scripts.Entities.Player
             _savedSolverVelocityIterations = _carriedRigidbody.solverVelocityIterations;
             _savedWasKinematic = _carriedRigidbody.isKinematic;
             _savedUseGravity = _carriedRigidbody.useGravity;
+            _savedLinearDamping = _carriedRigidbody.linearDamping;
+            _savedAngularDamping = _carriedRigidbody.angularDamping;
+            _tunedBody = _carriedRigidbody;
 
-            // Configure for physics carry - NEVER kinematic, NEVER disable colliders
+            // Configure for force-based carry
             _carriedRigidbody.isKinematic = false;
             _carriedRigidbody.useGravity = false;
             _carriedRigidbody.interpolation = RigidbodyInterpolation.Interpolate;
             _carriedRigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-            _carriedRigidbody.solverIterations = Mathf.Max(_savedSolverIterations, carrySolverIterations);
-            _carriedRigidbody.solverVelocityIterations = Mathf.Max(_savedSolverVelocityIterations, carrySolverVelocityIterations);
-            _carriedRigidbody.maxDepenetrationVelocity = carryMaxDepenetration;
+            _carriedRigidbody.solverIterations = Mathf.Max(_savedSolverIterations, 16);
+            _carriedRigidbody.solverVelocityIterations = Mathf.Max(_savedSolverVelocityIterations, 8);
+            _carriedRigidbody.maxDepenetrationVelocity = 1.5f;
             _carriedRigidbody.maxAngularVelocity = Mathf.Max(_savedMaxAngularVelocity, maxCarryAngularSpeed * Mathf.Deg2Rad);
+            _carriedRigidbody.linearDamping = Mathf.Max(_savedLinearDamping, carryDamping);
+            _carriedRigidbody.angularDamping = Mathf.Max(_savedAngularDamping, carryDamping);
             _carriedRigidbody.linearVelocity = Vector3.zero;
             _carriedRigidbody.angularVelocity = Vector3.zero;
             _carriedRigidbody.WakeUp();
 
-            // Ignore collisions with player so carried item doesn't fight the capsule
-            SetCarriedObjectPlayerCollisionIgnored(true);
+            // Init spatial state
+            var cam = Cam;
+            var from = cam != null ? cam.transform.position : (carryLocation != null ? carryLocation.position : transform.position + transform.forward * defaultHoldDistance);
+            var dist = Vector3.Distance(from, interactable.transform.position);
+            _holdDistance = Mathf.Clamp(dist, minHoldDistance, maxHoldDistance);
+            if (_holdDistance < 0.05f) _holdDistance = defaultHoldDistance;
+            _planarOffset = Vector3.zero;
+            _hasPreviousTarget = false;
+            _targetVelocity = Vector3.zero;
+            var playerYaw = YawRotation(playerBody != null ? playerBody.rotation : transform.rotation);
+            _yawOffsetFromPlayer = Quaternion.Inverse(playerYaw) * interactable.transform.rotation;
 
+            SetCarriedObjectPlayerCollisionIgnored(true);
             ClearHologramHighlight();
             SetHighlightVisible(false);
         }
 
-        // Physics-based drive for carried object
+        // Spatial input: scroll distance, MMB plane shove
+        private void UpdateSpatialInput()
+        {
+            var mouse = Mouse.current;
+            if (mouse == null) return;
+
+            var scroll = mouse.scroll.ReadValue().y;
+            if (Mathf.Abs(scroll) > 0.01f)
+            {
+                var notches = scroll > 0f ? 1f : -1f;
+                if (Mathf.Abs(scroll) > 120f) notches = scroll / 120f;
+                _holdDistance = Mathf.Clamp(_holdDistance + notches * scrollMetersPerNotch, minHoldDistance, maxHoldDistance);
+            }
+
+            RefreshSpatialMode();
+            if (_spatialModeActive)
+            {
+                var delta = mouse.delta.ReadValue();
+                if (playerBody != null)
+                {
+                    _planarOffset += playerBody.up * (delta.x * planeDragSensitivity);
+                    _planarOffset += playerBody.forward * (delta.y * planeDragSensitivity);
+                }
+            }
+        }
+
+        private void RefreshSpatialMode()
+        {
+            var mmb = Mouse.current != null && Mouse.current.middleButton.isPressed;
+            _spatialModeActive = IsCarrying && (mmb || _hudSpatialHeld || !spatialModeRequiresMMB);
+            // If spatialModeRequiresMMB is true, require MMB; else always allow planar offset? We keep logic:
+            if (spatialModeRequiresMMB)
+                _spatialModeActive = IsCarrying && (mmb || _hudSpatialHeld);
+        }
+
         private void DriveCarriedBody()
         {
             if (_carriedInteractable == null || _carriedRigidbody == null) return;
-
             var body = _carriedRigidbody;
             if (body.isKinematic) return;
 
             var dt = Time.fixedDeltaTime;
-            var targetPos = carryLocation != null ? carryLocation.position : ReticleRay.GetPoint(interactionDistance);
-            var targetRot = carryLocation != null ? carryLocation.rotation : _camera.transform.rotation;
+            var targetPos = ComputeTargetPosition();
+            var targetRot = ComputeTargetRotation();
+            UpdateTargetVelocity(targetPos, dt);
 
-            // Damped follow
             var toTarget = targetPos - body.position;
-            var velocity = toTarget / Mathf.Max(followTime, dt);
-            velocity = Vector3.ClampMagnitude(velocity, MaxSafeSpeed(dt));
+            var gap = toTarget.magnitude;
 
-            // Resolve overlaps
-            var separation = resolveOverlaps ? ComputeSeparationVelocity(dt) : Vector3.zero;
-            var overlapping = separation.sqrMagnitude > 1e-8f;
-            if (overlapping) velocity += separation;
+            ApplyCarryForce(body, toTarget, gap, dt);
+            ApplyCarryTorque(body, targetRot, dt);
+        }
 
-            // Sweep against geometry
-            if (sweepAgainstGeometry)
-                velocity = LimitBySweep(body, velocity, dt);
+        private void ApplyCarryForce(Rigidbody body, Vector3 toTarget, float gap, float dt)
+        {
+            var mass = Mathf.Max(0.01f, body.mass);
+            var forceCap = Mathf.Min(maxCarryForce, mass * maxCarryAcceleration);
+            var accelCap = forceCap / mass;
+            var maxSpeed = Mathf.Max(0.1f, maxCarrySpeed);
 
-            body.linearVelocity = velocity;
+            var desiredVelocity = Vector3.ClampMagnitude(_targetVelocity, maxSpeed);
+            if (gap > 1e-4f)
+            {
+                var approachSpeed = Mathf.Min(BrakingSpeed(gap, accelCap, dt), maxSpeed);
+                desiredVelocity += toTarget * (approachSpeed / gap);
+            }
 
-            // Angular
+            var neededForce = (desiredVelocity - body.linearVelocity) * (mass / dt);
+            var force = Vector3.ClampMagnitude(neededForce, forceCap);
+            body.AddForce(force, ForceMode.Force);
+        }
+
+        private void ApplyCarryTorque(Rigidbody body, Quaternion targetRot, float dt)
+        {
             var deltaRot = targetRot * Quaternion.Inverse(body.rotation);
             deltaRot.ToAngleAxis(out var angleDeg, out var axis);
             if (angleDeg > 180f) angleDeg -= 360f;
+
+            var maxAngularSpeed = Mathf.Max(0.1f, maxCarryAngularSpeed) * Mathf.Deg2Rad;
+            var desiredAngularVelocity = Vector3.zero;
+
             if (Mathf.Abs(angleDeg) > 0.05f && axis.sqrMagnitude > 1e-6f)
             {
                 axis.Normalize();
-                var stepAngular = axis * (angleDeg * Mathf.Deg2Rad / Mathf.Max(rotationFollowTime, dt));
-                var maxAngular = Mathf.Max(1f, maxCarryAngularSpeed) * Mathf.Deg2Rad;
-                if (overlapping) maxAngular *= 0.25f;
-                body.angularVelocity = Vector3.ClampMagnitude(stepAngular, maxAngular);
+                var angleRad = angleDeg * Mathf.Deg2Rad;
+                var speed = Mathf.Min(BrakingSpeed(Mathf.Abs(angleRad), maxCarryAngularAcceleration, dt), maxAngularSpeed);
+                desiredAngularVelocity = axis * (Mathf.Sign(angleRad) * speed);
+            }
+
+            var angularAccel = (desiredAngularVelocity - body.angularVelocity) / dt;
+            angularAccel = Vector3.ClampMagnitude(angularAccel, maxCarryAngularAcceleration);
+
+            var torque = InertiaTensorTimes(body, angularAccel);
+            torque = Vector3.ClampMagnitude(torque, maxCarryTorque);
+            body.AddTorque(torque, ForceMode.Force);
+        }
+
+        private static float BrakingSpeed(float distance, float decel, float dt)
+        {
+            var step = decel * dt;
+            return Mathf.Sqrt(step * step + 2f * decel * distance) - step;
+        }
+
+        private static Vector3 InertiaTensorTimes(Rigidbody body, Vector3 angularAccel)
+        {
+            var tensorRot = body.rotation * body.inertiaTensorRotation;
+            var local = Quaternion.Inverse(tensorRot) * angularAccel;
+            var tensor = body.inertiaTensor;
+            local = new Vector3(local.x * tensor.x, local.y * tensor.y, local.z * tensor.z);
+            return tensorRot * local;
+        }
+
+        private void UpdateTargetVelocity(Vector3 targetPos, float dt)
+        {
+            if (_hasPreviousTarget)
+            {
+                var measured = (targetPos - _previousTargetPos) / dt;
+                _targetVelocity = Vector3.Lerp(_targetVelocity, measured, 0.5f);
             }
             else
             {
-                body.angularVelocity = Vector3.zero;
+                _targetVelocity = Vector3.zero;
+                _hasPreviousTarget = true;
             }
+            _previousTargetPos = targetPos;
+        }
+
+        private Vector3 ComputeTargetPosition()
+        {
+            var cam = Cam;
+            var origin = cam != null ? cam.transform.position : (carryLocation != null ? carryLocation.position : transform.position);
+            var alongCam = cam != null ? cam.transform.forward : transform.forward;
+            return origin + alongCam * _holdDistance + _planarOffset;
+        }
+
+        private Quaternion ComputeTargetRotation()
+        {
+            if (carryLocation != null && !_spatialModeActive)
+                return carryLocation.rotation;
+            var pb = playerBody != null ? playerBody.rotation : transform.rotation;
+            return YawRotation(pb) * _yawOffsetFromPlayer;
         }
 
         private void BeginDrop()
@@ -373,7 +523,6 @@ namespace GameAssets.Scripts.Entities.Player
             _droppingInteractable = _carriedInteractable;
             _dropTargetPosition = GetDropTargetPosition();
             _carriedInteractable = null;
-            // Keep physics settings, keep ignoring player until drop finishes, but colliders stay enabled
         }
 
         private void DriveDroppedBody()
@@ -383,28 +532,19 @@ namespace GameAssets.Scripts.Entities.Player
             var dt = Time.fixedDeltaTime;
             var toTarget = _dropTargetPosition - body.position;
             var dist = toTarget.magnitude;
-
-            // If close enough, finish drop
-            if (dist < 0.02f)
+            if (dist < 0.05f)
             {
-                // Snap and restore
                 body.position = _dropTargetPosition;
                 body.transform.localScale = _carriedOriginalScale;
-                RestoreCarriedPhysics();
+                RestoreCarriedPhysics(true);
                 _droppingInteractable = null;
                 _carriedRigidbody = null;
                 _carriedColliders = null;
                 return;
             }
-
-            var velocity = toTarget / Mathf.Max(followTime, dt);
-            velocity = Vector3.ClampMagnitude(velocity, MaxSafeSpeed(dt));
-            if (sweepAgainstGeometry)
-                velocity = LimitBySweep(body, velocity, dt);
-            body.linearVelocity = velocity;
-            body.angularVelocity = Vector3.zero;
-
-            // Scale lerp handled in Update
+            // Use same force approach to drop target
+            ApplyCarryForce(body, toTarget, dist, dt);
+            body.angularVelocity *= 0.95f;
         }
 
         private void ThrowCarriedObject()
@@ -418,7 +558,7 @@ namespace GameAssets.Scripts.Entities.Player
 
             if (_carriedRigidbody != null)
             {
-                RestoreCarriedPhysics(saveVelocity: false);
+                RestoreCarriedPhysics(false);
                 _carriedRigidbody.AddForce(_camera.transform.forward * throwForce, ForceMode.Impulse);
             }
             else
@@ -467,140 +607,37 @@ namespace GameAssets.Scripts.Entities.Player
         {
             var heldTransform = _carriedInteractable != null ? _carriedInteractable.transform : _droppingInteractable != null ? _droppingInteractable.transform : null;
             if (heldTransform != null) heldTransform.localScale = _carriedOriginalScale;
-
             if (_carriedRigidbody != null)
-                RestoreCarriedPhysics(saveVelocity: false);
-
+                RestoreCarriedPhysics(false);
             _carriedInteractable = null;
             _droppingInteractable = null;
             _carriedRigidbody = null;
             _carriedColliders = null;
         }
 
-        private void RestoreCarriedPhysics(bool saveVelocity = true)
+        private void RestoreCarriedPhysics(bool clampReleaseSpeed)
         {
             SetCarriedObjectPlayerCollisionIgnored(false);
             if (_carriedRigidbody == null) return;
-
-            if (saveVelocity)
+            var body = _carriedRigidbody;
+            body.isKinematic = _savedWasKinematic;
+            body.useGravity = _savedUseGravity;
+            body.interpolation = _savedInterpolation;
+            body.collisionDetectionMode = _savedCollisionDetection;
+            if (_savedMaxDepenetrationVelocity >= 0f) body.maxDepenetrationVelocity = _savedMaxDepenetrationVelocity;
+            if (_savedMaxAngularVelocity >= 0f) body.maxAngularVelocity = _savedMaxAngularVelocity;
+            if (_savedSolverIterations > 0) body.solverIterations = _savedSolverIterations;
+            if (_savedSolverVelocityIterations > 0) body.solverVelocityIterations = _savedSolverVelocityIterations;
+            body.linearDamping = _savedLinearDamping;
+            body.angularDamping = _savedAngularDamping;
+            if (clampReleaseSpeed && !body.isKinematic)
             {
-                // keep current velocity
+                body.linearVelocity = Vector3.ClampMagnitude(body.linearVelocity, maxReleaseSpeed);
+                body.angularVelocity = Vector3.ClampMagnitude(body.angularVelocity, maxReleaseSpeed);
             }
-
-            _carriedRigidbody.isKinematic = _savedWasKinematic;
-            _carriedRigidbody.useGravity = _savedUseGravity;
-            _carriedRigidbody.interpolation = _savedInterpolation;
-            _carriedRigidbody.collisionDetectionMode = _savedCollisionDetection;
-            if (_savedMaxDepenetrationVelocity >= 0f) _carriedRigidbody.maxDepenetrationVelocity = _savedMaxDepenetrationVelocity;
-            if (_savedMaxAngularVelocity >= 0f) _carriedRigidbody.maxAngularVelocity = _savedMaxAngularVelocity;
-            if (_savedSolverIterations > 0) _carriedRigidbody.solverIterations = _savedSolverIterations;
-            if (_savedSolverVelocityIterations > 0) _carriedRigidbody.solverVelocityIterations = _savedSolverVelocityIterations;
-        }
-
-        // --- Collision helpers ---
-
-        private float MaxSafeSpeed(float dt)
-        {
-            var speed = Mathf.Max(0.1f, maxCarrySpeed);
-            if (sweepAgainstGeometry) return speed;
-            var thickness = SmallestThickness;
-            if (thickness > 0f) speed = Mathf.Min(speed, thickness / Mathf.Max(dt, 1e-4f));
-            return speed;
-        }
-
-        private float SmallestThickness
-        {
-            get
-            {
-                if (_smallestThickness > 0f) return _smallestThickness;
-                _smallestThickness = ComputeSmallestThickness();
-                return _smallestThickness;
-            }
-        }
-
-        private float ComputeSmallestThickness()
-        {
-            if (_carriedColliders == null || _carriedColliders.Length == 0) return 0.1f;
-            var found = false;
-            var bounds = new Bounds();
-            foreach (var c in _carriedColliders)
-            {
-                if (c == null) continue;
-                if (!found) { bounds = c.bounds; found = true; }
-                else bounds.Encapsulate(c.bounds);
-            }
-            if (!found) return 0.1f;
-            var size = bounds.size;
-            return Mathf.Max(0.02f, Mathf.Min(size.x, Mathf.Min(size.y, size.z)));
-        }
-
-        private Vector3 LimitBySweep(Rigidbody body, Vector3 velocity, float dt)
-        {
-            var speed = velocity.magnitude;
-            if (speed < 1e-4f) return velocity;
-            var dir = velocity / speed;
-            var distance = speed * dt + contactSkin;
-            var hits = body.SweepTestAll(dir, distance, QueryTriggerInteraction.Ignore);
-            var nearest = float.MaxValue;
-            var normal = Vector3.zero;
-            foreach (var hit in hits)
-            {
-                var other = hit.collider;
-                if (other == null || IsSelfOrCarrier(other)) continue;
-                if ((obstructionLayers.value & (1 << other.gameObject.layer)) == 0) continue;
-                if (hit.distance >= nearest) continue;
-                nearest = hit.distance;
-                normal = hit.normal;
-            }
-            if (nearest >= float.MaxValue || normal.sqrMagnitude < 1e-6f) return velocity;
-
-            var allowed = Mathf.Max(0f, nearest - contactSkin);
-            var maxApproach = allowed / Mathf.Max(dt, 1e-4f);
-            var approach = Vector3.Dot(velocity, -normal);
-            if (approach > maxApproach)
-                velocity += normal * (approach - maxApproach);
-            return velocity;
-        }
-
-        private Vector3 ComputeSeparationVelocity(float dt)
-        {
-            if (_carriedColliders == null) return Vector3.zero;
-            var separation = Vector3.zero;
-            foreach (var itemCol in _carriedColliders)
-            {
-                if (itemCol == null || !itemCol.enabled || !itemCol.gameObject.activeInHierarchy) continue;
-                var bounds = itemCol.bounds;
-                var count = Physics.OverlapBoxNonAlloc(bounds.center, bounds.extents + Vector3.one * contactSkin, _overlapBuffer, Quaternion.identity, obstructionLayers, QueryTriggerInteraction.Ignore);
-                for (var i = 0; i < count; i++)
-                {
-                    var other = _overlapBuffer[i];
-                    if (other == null || IsSelfOrCarrier(other)) continue;
-                    var otherBody = other.attachedRigidbody;
-                    if (otherBody != null && !otherBody.isKinematic) continue;
-                    if (Physics.ComputePenetration(itemCol, itemCol.transform.position, itemCol.transform.rotation, other, other.transform.position, other.transform.rotation, out var dir, out var dist))
-                        separation += dir * dist;
-                }
-            }
-            if (separation.sqrMagnitude < 1e-8f) return Vector3.zero;
-            var speed = Mathf.Min(separation.magnitude / Mathf.Max(dt, 1e-4f), depenetrationSpeed);
-            return separation.normalized * speed;
-        }
-
-        private bool IsSelfOrCarrier(Collider candidate)
-        {
-            if (candidate == null) return false;
-            if (_carriedColliders != null)
-            {
-                foreach (var c in _carriedColliders)
-                    if (c == candidate) return true;
-                if (_carriedRigidbody != null && candidate.attachedRigidbody == _carriedRigidbody) return true;
-                // child of carried
-                if (_carriedInteractable != null && candidate.transform.IsChildOf(_carriedInteractable.transform)) return true;
-                if (_droppingInteractable != null && candidate.transform.IsChildOf(_droppingInteractable.transform)) return true;
-            }
-            foreach (var pc in PlayerColliders)
-                if (pc == candidate) return true;
-            return false;
+            _tunedBody = null;
+            _hasPreviousTarget = false;
+            _targetVelocity = Vector3.zero;
         }
 
         private bool IsCarriedCollider(Collider collider)
@@ -624,22 +661,17 @@ namespace GameAssets.Scripts.Entities.Player
 
         private void SetCarriedObjectPlayerCollisionIgnored(bool ignored)
         {
-            // Restore first
             for (int i = 0; i < _ignoredCarrierColliders.Count; i++)
             {
                 var carrierCol = _ignoredCarrierColliders[i];
                 if (carrierCol == null) continue;
                 if (_carriedColliders != null)
-                {
                     foreach (var itemCol in _carriedColliders)
                         if (itemCol != null)
                             Physics.IgnoreCollision(itemCol, carrierCol, false);
-                }
             }
             _ignoredCarrierColliders.Clear();
-
             if (!ignored) return;
-
             var pcs = PlayerColliders;
             if (pcs == null) return;
             foreach (var pc in pcs)
@@ -647,11 +679,9 @@ namespace GameAssets.Scripts.Entities.Player
                 if (pc == null) continue;
                 _ignoredCarrierColliders.Add(pc);
                 if (_carriedColliders != null)
-                {
                     foreach (var itemCol in _carriedColliders)
                         if (itemCol != null)
                             Physics.IgnoreCollision(itemCol, pc, true);
-                }
             }
         }
 
@@ -665,9 +695,18 @@ namespace GameAssets.Scripts.Entities.Player
                         _playerColliders = _playerCharacterController.GetComponentsInChildren<Collider>();
                     if ((_playerColliders == null || _playerColliders.Length == 0) && _playerCharacterController != null)
                         _playerColliders = _playerCharacterController.transform.root.GetComponentsInChildren<Collider>();
+                    if ((_playerColliders == null || _playerColliders.Length == 0) && playerBody != null)
+                        _playerColliders = playerBody.GetComponentsInChildren<Collider>();
                 }
                 return _playerColliders ?? System.Array.Empty<Collider>();
             }
+        }
+
+        private Camera Cam => viewCamera != null ? viewCamera : (_camera != null ? _camera : Camera.main);
+        private static Quaternion YawRotation(Quaternion rot)
+        {
+            var e = rot.eulerAngles;
+            return Quaternion.Euler(0f, e.y, 0f);
         }
 
         private bool TryGetScreenBounds(Interactable interactable, out Rect screenBounds)
