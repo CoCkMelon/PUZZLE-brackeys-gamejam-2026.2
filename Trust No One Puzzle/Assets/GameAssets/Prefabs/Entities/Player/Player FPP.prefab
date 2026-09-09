@@ -1323,6 +1323,7 @@ GameObject:
   - component: {fileID: 269741321870534704}
   - component: {fileID: 3572125382592389028}
   - component: {fileID: 5172789925253797688}
+  - component: {fileID: 9036000000000000002}
   m_Layer: 0
   m_Name: Controller
   m_TagString: Player
@@ -2941,3 +2942,33 @@ Transform:
   - {fileID: 9098359493873267496}
   m_Father: {fileID: 4043791058995060947}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+
+--- !u!114 &9036000000000000002
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4461040473336325342}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3431c1bebd153d85e97feecad2a0aa10, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Puzzle.PlayerCarry
+  holdPoint: {fileID: 9036000000000000001}
+  playerBody: {fileID: 7748932868793466452}
+  viewCamera: {fileID: 8719422010191010497}
+  dropAction: {fileID: 0}
+  spatialModeAction: {fileID: 0}
+  maxCarryForce: 300
+  maxCarryTorque: 30
+  maxCarryAcceleration: 60
+  maxCarryAngularAcceleration: 120
+  carryDamping: 1
+  maxReleaseSpeed: 3
+  stuckDropGap: 0.5
+  stuckDropDelay: 0.7
+  carryBreakDistance: 4
+  scrollMetersPerNotch: 0.35
+  planeDragSensitivity: 0.008
+
