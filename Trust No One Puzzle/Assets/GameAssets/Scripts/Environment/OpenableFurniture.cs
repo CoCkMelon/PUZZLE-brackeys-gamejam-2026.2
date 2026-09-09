@@ -2,7 +2,9 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.InputSystem;
+using GameAssets.Scripts.Entities;
 using GameAssets.Scripts.Entities.Player;
+using GameAssets.Scripts.Interaction;
 using GameAssets.Scripts.Puzzle;
 
 namespace GameAssets.Scripts.Environment
@@ -12,11 +14,12 @@ namespace GameAssets.Scripts.Environment
     /// The object holding this component needs a collider that can be hit by the player's reticle ray.
     ///
     /// Optional lock: tick <c>Starts Locked</c> and the furniture refuses to open until it is unlocked.
-    /// It can be unlocked in two ways:
-    ///   1. With a key: the player carries the key object and presses E while looking at the furniture.
-    ///      The key is matched either by a direct scene reference (<c>Required Key</c>) or by id
-    ///      (<c>Required Key Id</c> against a <see cref="FurnitureKey"/> / <see cref="PlaceableItem"/> on the carried object).
-    ///   2. From code or a UnityEvent by calling <see cref="Unlock"/> (puzzles, triggers, dialogue, ...).
+    /// It can be unlocked in three ways:
+    ///   1. With a referenced key object: set <c>Required Key</c> to a scene object; the player carries
+    ///      that object and presses the interact key while looking at the furniture.
+    ///   2. With a key id: set <c>Required Key Id</c>; any carried <see cref="KeyItem"/> with a matching
+    ///      id (or a matching id already collected into the <see cref="KeyRing"/>) unlocks it.
+    ///   3. From code or a UnityEvent by calling <see cref="Unlock"/> (puzzles, triggers, dialogue, ...).
     /// </summary>
     [RequireComponent(typeof(Collider))]
     public class OpenableFurniture : MonoBehaviour
@@ -27,12 +30,6 @@ namespace GameAssets.Scripts.Environment
             Slide
         }
 
-        private const string PromptOpen = "Press E To Open";
-        private const string PromptClose = "Press E To Close";
-        private const string PromptUnlock = "Press E To Unlock";
-        private const string PromptLockedNeedKey = "Locked [Need Key]";
-        private const string PromptLocked = "Locked";
-
         [Header("References")]
         [SerializeField] private Transform movingPart;
         [SerializeField] private TMP_Text interactionPrompt;
@@ -41,6 +38,10 @@ namespace GameAssets.Scripts.Environment
         [Header("Raycast")]
         [SerializeField, Min(0.1f)] private float interactionDistance = 3f;
         [SerializeField] private LayerMask interactionLayers = ~0;
+
+        [Header("Interaction")]
+        [Tooltip("Key the player presses while looking at the furniture to open / close / unlock it.")]
+        [SerializeField] private Key interactKey = Key.E;
 
         [Header("Opening")]
         [SerializeField] private OpenMode openMode = OpenMode.Rotate;
@@ -52,13 +53,20 @@ namespace GameAssets.Scripts.Environment
         [Tooltip("If true, the furniture starts locked and will not open until it is unlocked with a key or Unlock() is called.")]
         [SerializeField] private bool startsLocked;
 
-        [Tooltip("A specific scene object that works as the key. The player has to carry it and press E on this furniture. " +
+        [Tooltip("A specific scene object that works as the key. The player has to carry it and press the interact key on this furniture. " +
                  "Leave empty to match keys by Required Key Id only (or to unlock from code/events only).")]
         [SerializeField] private GameObject requiredKey;
 
-        [Tooltip("Any carried object with a FurnitureKey (or PlaceableItem) whose id equals this value unlocks the furniture. " +
-                 "Case-insensitive. Leave empty to match by Required Key only (or to unlock from code/events only).")]
+        [Tooltip("Any KeyItem whose id equals this value unlocks the furniture (case-insensitive). " +
+                 "Leave empty to match by Required Key only (or to unlock from code/events only).")]
         [SerializeField] private string requiredKeyId;
+
+        [Tooltip("Allow the player to unlock this by interacting while owning a matching key. " +
+                 "Off = only script / UnityEvent calls to Unlock() open the lock.")]
+        [SerializeField] private bool unlockWithKey = true;
+
+        [Tooltip("Where the key may come from: the player's hands, the collected key ring, or either.")]
+        [SerializeField] private KeyAccess keyAccess = KeyAccess.HeldOrKeyRing;
 
         [Tooltip("Take the key out of the player's hands and hide it once it has been used.")]
         [SerializeField] private bool consumeKey = true;
@@ -66,17 +74,35 @@ namespace GameAssets.Scripts.Environment
         [Tooltip("Open the furniture right away after it has been unlocked with a key.")]
         [SerializeField] private bool openWhenUnlocked = true;
 
+        [Tooltip("Lock again every time the furniture is closed (the key is needed each time).")]
+        [SerializeField] private bool relockOnClose;
+
         [Tooltip("Played at the furniture when it is unlocked with a key.")]
         [SerializeField] private AudioClip unlockSound;
 
-        [Tooltip("Played at the furniture when the player presses E on it while it is locked without the key.")]
+        [Tooltip("Played at the furniture when the player presses the interact key on it while it is locked without the key.")]
         [SerializeField] private AudioClip lockedSound;
 
-        [Header("Lock Events")]
+        [Header("Prompts")]
+        [Tooltip("{0} = interact key name.")]
+        [SerializeField] private string openPromptText = "Press {0} To Open";
+        [Tooltip("{0} = interact key name.")]
+        [SerializeField] private string closePromptText = "Press {0} To Close";
+        [SerializeField] private string lockedPromptText = "Locked [Need Key]";
+        [Tooltip("{0} = interact key name, {1} = key display name.")]
+        [SerializeField] private string unlockPromptText = "Press {0} To Unlock with {1}";
+
+        [Header("Events")]
+        [Tooltip("Fired when the furniture starts opening.")]
+        public UnityEvent OnOpened;
+
+        [Tooltip("Fired when the furniture starts closing.")]
+        public UnityEvent OnClosed;
+
         [Tooltip("Fired once when the furniture becomes unlocked (by key or Unlock()).")]
         public UnityEvent OnUnlocked;
 
-        [Tooltip("Fired when the player presses E on the furniture while it is locked and has no matching key.")]
+        [Tooltip("Fired when the player presses the interact key on the furniture while it is locked and has no matching key.")]
         public UnityEvent OnLockedAttempt;
 
         private readonly RaycastHit[] _reticleHits = new RaycastHit[32];
@@ -98,23 +124,7 @@ namespace GameAssets.Scripts.Environment
         public bool RequiresKey => requiredKey != null || !string.IsNullOrWhiteSpace(requiredKeyId);
 
         /// <summary>The text shown when the player looks at this furniture.</summary>
-        public string PromptText
-        {
-            get
-            {
-                if (_isLocked)
-                {
-                    if (FindCarriedKey() != null)
-                    {
-                        return PromptUnlock;
-                    }
-
-                    return RequiresKey ? PromptLockedNeedKey : PromptLocked;
-                }
-
-                return _isOpen ? PromptClose : PromptOpen;
-            }
-        }
+        public string PromptText => BuildPromptText();
 
         private void Awake()
         {
@@ -127,8 +137,6 @@ namespace GameAssets.Scripts.Environment
             _openRotation = _closedRotation * Quaternion.Euler(openRotation);
             _closedPosition = movingPart.localPosition;
             _openPosition = _closedPosition + openOffset;
-            _isLocked = startsLocked;
-
             _isLocked = startsLocked;
 
             if (playerCameraController == null)
@@ -161,7 +169,7 @@ namespace GameAssets.Scripts.Environment
         }
 
         // ─────────────────────────────────────────────
-        //  Public API
+        //  Public API (also usable from UnityEvents)
         // ─────────────────────────────────────────────
 
         /// <summary>
@@ -212,7 +220,7 @@ namespace GameAssets.Scripts.Environment
         /// <summary>
         /// Attempts the key unlock explicitly. Returns true when a matching key
         /// was found. Plays the locked sound and fires <see cref="OnLockedAttempt"/>
-        /// when the player has no key.
+        /// when the player has no key. Safe to call from UnityEvents.
         /// </summary>
         public bool TryUnlockWithKey()
         {
@@ -221,87 +229,15 @@ namespace GameAssets.Scripts.Environment
                 return true;
             }
 
-            if (unlockWithKey &&
-                KeyItem.TryUseKey(requiredKeyId, keyAccess, consumeKeyOnUnlock, out _))
+            if (unlockWithKey && TryConsumeMatchingKey())
             {
-                _isLocked = false;
-                PlaySound(unlockSound);
-                OnUnlocked?.Invoke();
-
-                if (openOnUnlock && !_isOpen)
-                {
-                    Interact();
-                    UpdatePromptText();
-                }
-
+                UnlockNow();
                 return true;
             }
 
             PlaySound(lockedSound);
             OnLockedAttempt?.Invoke();
             return false;
-        }
-
-        // ─────────────────────────────────────────────
-        //  Public API (also usable from UnityEvents)
-        // ─────────────────────────────────────────────
-
-        /// <summary>
-        /// Same as the player pressing E while looking at the furniture:
-        /// toggles it when unlocked, otherwise tries to unlock it with the carried key.
-        /// </summary>
-        public void Interact()
-        {
-            if (_isLocked)
-            {
-                var key = FindCarriedKey();
-                if (key != null)
-                {
-                    UnlockWithKey(key);
-                }
-                else
-                {
-                    RejectLockedInteraction();
-                }
-
-                return;
-            }
-
-            _isOpen = !_isOpen;
-        }
-
-        /// <summary>Opens the furniture unless it is locked.</summary>
-        public void Open()
-        {
-            if (!_isLocked)
-            {
-                _isOpen = true;
-            }
-        }
-
-        /// <summary>Closes the furniture.</summary>
-        public void Close()
-        {
-            _isOpen = false;
-        }
-
-        /// <summary>Unlocks the furniture so it can be opened. Call from other puzzles, triggers or events.</summary>
-        public void Unlock()
-        {
-            if (!_isLocked)
-            {
-                return;
-            }
-
-            _isLocked = false;
-            OnUnlocked?.Invoke();
-        }
-
-        /// <summary>Locks the furniture again. If it is open, it closes.</summary>
-        public void Lock()
-        {
-            _isLocked = true;
-            _isOpen = false;
         }
 
         /// <summary>
@@ -315,7 +251,12 @@ namespace GameAssets.Scripts.Environment
                 return false;
             }
 
-            UnlockWithKey(candidate);
+            if (consumeKey)
+            {
+                ConsumeKey(candidate);
+            }
+
+            UnlockNow();
             return true;
         }
 
@@ -350,6 +291,17 @@ namespace GameAssets.Scripts.Environment
                 return true;
             }
 
+            var keyItem = candidate.GetComponentInChildren<KeyItem>(true);
+            if (keyItem == null)
+            {
+                keyItem = candidate.GetComponentInParent<KeyItem>();
+            }
+
+            if (keyItem != null && keyItem.Matches(requiredKeyId))
+            {
+                return true;
+            }
+
             var placeable = candidate.GetComponentInChildren<PlaceableItem>(true);
             if (placeable == null)
             {
@@ -363,26 +315,78 @@ namespace GameAssets.Scripts.Environment
         //  Lock internals
         // ─────────────────────────────────────────────
 
-        private void UnlockWithKey(GameObject key)
+        /// <summary>
+        /// Unlocks with whatever matching key the player has: the referenced key object
+        /// in hand, or a matching key id (held or already on the key ring).
+        /// </summary>
+        private bool TryConsumeMatchingKey()
+        {
+            // 1. Direct scene reference: the player must hold that exact object.
+            var carriedKey = FindCarriedKey();
+            if (carriedKey != null)
+            {
+                UnlockWithReferenceKey(carriedKey);
+                return true;
+            }
+
+            // 2. Key id via the shared KeyItem / KeyRing system (empty id = no id lock).
+            if (!string.IsNullOrWhiteSpace(requiredKeyId) &&
+                KeyItem.TryUseKey(requiredKeyId, keyAccess, consumeKey, out _))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private void UnlockWithReferenceKey(GameObject key)
         {
             if (consumeKey)
             {
                 ConsumeKey(key);
             }
+        }
 
+        /// <summary>Shared key-unlock sequence: clear the lock, sound + event, auto-open.</summary>
+        private void UnlockNow()
+        {
+            _isLocked = false;
             PlaySound(unlockSound);
-            Unlock();
+            OnUnlocked?.Invoke();
 
-            if (openWhenUnlocked)
+            if (openWhenUnlocked && !_isOpen)
             {
-                _isOpen = true;
+                SetOpen(true);
             }
         }
 
-        private void RejectLockedInteraction()
+        private void SetOpen(bool open)
         {
-            PlaySound(lockedSound);
-            OnLockedAttempt?.Invoke();
+            if (open && _isLocked)
+            {
+                return;
+            }
+
+            if (_isOpen == open)
+            {
+                return;
+            }
+
+            _isOpen = open;
+
+            if (open)
+            {
+                OnOpened?.Invoke();
+            }
+            else
+            {
+                OnClosed?.Invoke();
+
+                if (relockOnClose)
+                {
+                    _isLocked = true;
+                }
+            }
         }
 
         /// <summary>Returns the object in the player's hands if it unlocks this furniture, otherwise null.</summary>
@@ -498,12 +502,10 @@ namespace GameAssets.Scripts.Environment
 
         private void UpdatePromptText()
         {
-            if (interactionPrompt == null)
+            if (interactionPrompt != null)
             {
-                interactionPrompt.text = PromptText;
+                interactionPrompt.text = BuildPromptText();
             }
-
-            interactionPrompt.text = BuildPromptText();
         }
 
         private string BuildPromptText()
@@ -512,16 +514,44 @@ namespace GameAssets.Scripts.Environment
 
             if (_isLocked)
             {
-                if (unlockWithKey && KeyItem.PlayerHasKey(requiredKeyId, keyAccess))
+                if (unlockWithKey && PlayerHasMatchingKey(out var keyDisplayName))
                 {
-                    return string.Format(unlockPromptText, keyName,
-                        KeyItem.DescribeKey(requiredKeyId, keyAccess));
+                    return string.Format(unlockPromptText, keyName, keyDisplayName);
                 }
 
-                return lockedPromptText;
+                return RequiresKey ? lockedPromptText : "Locked";
             }
 
             return string.Format(_isOpen ? closePromptText : openPromptText, keyName);
+        }
+
+        /// <summary>True when the player holds (or owns) a key that fits this lock right now.</summary>
+        private bool PlayerHasMatchingKey(out string keyDisplayName)
+        {
+            // Referenced key object in hand.
+            var carriedKey = FindCarriedKey();
+            if (carriedKey != null)
+            {
+                var interactable = carriedKey.GetComponentInChildren<Interactable>(true);
+                if (interactable == null)
+                {
+                    interactable = carriedKey.GetComponentInParent<Interactable>();
+                }
+
+                keyDisplayName = interactable != null ? interactable.DisplayName : carriedKey.name;
+                return true;
+            }
+
+            // Key id via the shared KeyItem / KeyRing system.
+            if (!string.IsNullOrWhiteSpace(requiredKeyId) &&
+                KeyItem.PlayerHasKey(requiredKeyId, keyAccess))
+            {
+                keyDisplayName = KeyItem.DescribeKey(requiredKeyId, keyAccess);
+                return true;
+            }
+
+            keyDisplayName = null;
+            return false;
         }
 
         private void SetPromptVisible(bool visible)
