@@ -1,33 +1,13 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using GameAssets.Scripts.Entities;
 
 namespace GameAssets.Scripts.Puzzle
 {
     /// <summary>
-    /// Physics-based carrying.
-    ///
-    /// Carried items are never made kinematic and never parented to the player:
-    /// while held they stay fully simulated rigidbodies with their colliders on,
-    /// steered toward the hold pose each physics step with a *bounded* force and
-    /// torque (<see cref="maxCarryForce"/>, <see cref="maxCarryTorque"/>).
-    /// Because the push is limited, the item can never be driven into a wall or
-    /// crush another prop into one: whatever it is pressed against receives at
-    /// most that force, the physics engine resolves the contact normally and the
-    /// item simply stops, slides along the obstacle or is dropped when it stays
-    /// stuck. Velocities are never written directly while held (that would be an
-    /// unbounded force) and no physics joints are used: they stretch, oscillate
-    /// and can outright explode in tight spaces.
-    ///
-    /// Heavier items (Rigidbody mass) accelerate slower under the same force, so
-    /// they lag behind a sprinting player and feel heavy; light items track the
-    /// hand tightly thanks to the acceleration caps.
-    ///
-    /// Handheld items closely track the hold point pose.
-    /// WorldStable / Spatial items keep world rotation (do not spin with look).
-    /// Spatial: mouse wheel moves along the camera ray (down = toward cam, up = away);
-    /// hold MMB or a mobile HUD button to slide in player space
-    /// (screen X → player up / local Y, screen Y → player forward / local Z).
-    /// Object yaw stays locked to the player body while shoved.
+    /// Best carry - force/torque limited, supports both PlaceableItem and Interactable.
+    /// Configurable controls, scroll distance, plane shove with flipped X/Y (X->forward, Y->up) and no camera rotation during shove.
+    /// LMB releases without throw.
     /// </summary>
     public class PlayerCarry : MonoBehaviour
     {
@@ -39,39 +19,48 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private Camera viewCamera;
         [SerializeField] private InputActionReference dropAction;
         [SerializeField] private InputActionReference spatialModeAction;
+        [SerializeField] private InputActionReference scrollAction; // optional, if null uses Mouse scroll
 
-        [Header("Carry force limits")]
-        [Tooltip("Strongest push (N) the carry can apply to the held item. This is also the most it can press " +
-                 "an item against a wall or another object, so keep it low enough that nothing gets shoved through geometry.")]
+        [Header("Carry force limits - prevents penetration")]
+        [Tooltip("Strongest push (N) the carry can apply. This is also max force item can press against wall.")]
         [SerializeField, Min(1f)] private float maxCarryForce = 300f;
-        [Tooltip("Strongest twist (N·m) used to turn the held item toward the hold rotation.")]
         [SerializeField, Min(0.1f)] private float maxCarryTorque = 30f;
-        [Tooltip("Acceleration cap (m/s²) so very light items don't snap around; heavy items are limited by Max Carry Force instead.")]
         [SerializeField, Min(1f)] private float maxCarryAcceleration = 60f;
-        [Tooltip("Angular acceleration cap (rad/s²) for light items; heavy items are limited by Max Carry Torque instead.")]
         [SerializeField, Min(1f)] private float maxCarryAngularAcceleration = 120f;
-        [Tooltip("Light extra damping on the held item while carried, a safety net against wobble when the servo is saturated. " +
-                 "Keep it low: a heavy item's top carry speed is roughly Max Carry Force / (mass × damping).")]
         [SerializeField, Min(0f)] private float carryDamping = 1f;
-        [Tooltip("Speed the item is allowed to keep when it is released. Stops a stuck item from flying off with stored servo speed.")]
         [SerializeField, Min(0f)] private float maxReleaseSpeed = 3f;
+        [SerializeField] private float maxCarrySpeed = 10f;
+        [SerializeField] private float maxCarryAngularSpeed = 720f;
+
+        [Header("Carry - Interactable (old) support")]
+        [SerializeField, Range(0.05f, 1f)] private float interactableScaleMultiplier = 0.65f;
+        [SerializeField] private float interactableFollowTimeScale = 1f; // extra lerp for scale
 
         [Header("Auto-drop")]
-        [Tooltip("Drop the item when it stays at least this far from its target hold pose.")]
         [SerializeField] private float stuckDropGap = 0.5f;
-        [Tooltip("Drop the item after it has been stuck (no progress toward the target) for this long.")]
         [SerializeField] private float stuckDropDelay = 0.7f;
-        [Tooltip("Instant drop when the item is this far from its target pose (wedged behind geometry).")]
         [SerializeField] private float carryBreakDistance = 4f;
 
-        [Header("Spatial move")]
+        [Header("Spatial move - configurable")]
         [SerializeField] private float scrollMetersPerNotch = 0.35f;
         [SerializeField] private float planeDragSensitivity = 0.008f;
+        [SerializeField] private float minHoldDistance = 0.6f;
+        [SerializeField] private float maxHoldDistance = 4f;
+        [SerializeField] private float defaultHoldDistance = 1.6f;
+        [Tooltip("Flip X/Y: true = X->forward, Y->up (intuitive), false = old X->up, Y->forward")]
+        [SerializeField] private bool flipPlanarAxes = true;
+        [SerializeField] private bool spatialModeRequiresMMB = true;
 
+        // Public state
         public PlaceableItem HeldItem { get; private set; }
-        public bool IsCarrying => HeldItem != null;
+        public Interactable HeldInteractable { get; private set; }
+        public bool IsCarrying => HeldItem != null || HeldInteractable != null;
         public bool SpatialModeActive { get; private set; }
 
+        // Common held data
+        private Rigidbody _heldBody;
+        private Collider[] _heldColliders;
+        private Vector3 _heldOriginalScale;
         private float _holdDistance;
         private Vector3 _planarOffset;
         private Quaternion _yawOffsetFromPlayer;
@@ -81,24 +70,27 @@ namespace GameAssets.Scripts.Puzzle
         private float _bestGap;
         private Collider[] _playerColliders;
 
-        // Hold-pose motion, estimated from successive physics steps so the
-        // servo can feed-forward the player's own movement.
         private Vector3 _previousTargetPos;
         private Vector3 _targetVelocity;
         private bool _hasPreviousTarget;
 
-        // Rigidbody settings overwritten while carrying, restored on release.
         private float _savedLinearDamping;
         private float _savedAngularDamping;
+        private RigidbodyInterpolation _savedInterpolation;
+        private CollisionDetectionMode _savedCollisionDetection;
+        private float _savedMaxDepenetrationVelocity = -1f;
+        private float _savedMaxAngularVelocity = -1f;
+        private int _savedSolverIterations = -1;
+        private int _savedSolverVelocityIterations = -1;
+        private bool _savedWasKinematic;
+        private bool _savedUseGravity;
         private Rigidbody _tunedBody;
 
         private void Awake()
         {
             Instance = this;
-            if (playerBody == null)
-                playerBody = transform;
-            if (viewCamera == null)
-                viewCamera = Camera.main;
+            if (playerBody == null) playerBody = transform;
+            if (viewCamera == null) viewCamera = Camera.main;
             if (holdPoint == null)
             {
                 var go = new GameObject("HoldPoint");
@@ -113,6 +105,7 @@ namespace GameAssets.Scripts.Puzzle
             Bind(dropAction, OnDrop, true);
             Bind(spatialModeAction, OnSpatialStarted, true);
             Bind(spatialModeAction, OnSpatialCanceled, false);
+            if (scrollAction != null) scrollAction.action.Enable();
         }
 
         private void OnDisable()
@@ -120,25 +113,24 @@ namespace GameAssets.Scripts.Puzzle
             Unbind(dropAction, OnDrop, true);
             Unbind(spatialModeAction, OnSpatialStarted, true);
             Unbind(spatialModeAction, OnSpatialCanceled, false);
+            if (scrollAction != null) scrollAction.action.Disable();
         }
 
         private void OnDestroy()
         {
-            if (Instance == this)
-                Instance = null;
+            if (Instance == this) Instance = null;
         }
 
         private void Update()
         {
             if (IsCarrying)
             {
-                // LMB releases without throwing (requested change)
+                // LMB releases without throwing (requested)
                 if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
                 {
                     DropInWorld();
                     return;
                 }
-                // G key fallback if dropAction not bound
                 if (Keyboard.current != null && Keyboard.current.gKey.wasPressedThisFrame)
                 {
                     DropInWorld();
@@ -146,36 +138,106 @@ namespace GameAssets.Scripts.Puzzle
                 }
             }
 
-            if (!IsCarrying || !HeldItem.UsesSpatialCarry)
-                return;
+            if (!IsCarrying) return;
 
+            // Scale lerp for Interactable
+            if (HeldInteractable != null)
+            {
+                var t = HeldInteractable.transform;
+                var lerpFactor = 1f - Mathf.Exp(-10f * Time.deltaTime * interactableFollowTimeScale);
+                t.localScale = Vector3.Lerp(t.localScale, _heldOriginalScale * interactableScaleMultiplier, lerpFactor);
+            }
+
+            // Spatial input only for items that use spatial or for Interactable if we allow
+            if (HeldItem != null && !HeldItem.UsesSpatialCarry) return;
             UpdateSpatialInput();
         }
 
         private void FixedUpdate()
         {
-            if (!IsCarrying)
-                return;
-
+            if (!IsCarrying) return;
             DriveHeldBody();
         }
 
+        // --- PlaceableItem API ---
+
         public bool TryPickUp(PlaceableItem item)
         {
-            if (item == null || IsCarrying)
-                return false;
+            if (item == null || IsCarrying) return false;
 
             HeldItem = item;
-            item.SetHeld(true, PlayerColliders);
+            HeldInteractable = null;
+            _heldBody = item.Body;
+            _heldColliders = item.Colliders;
+            _heldOriginalScale = item.transform.localScale;
 
+            PreparePickup(item.transform);
+            item.SetHeld(true, PlayerColliders);
+            TuneBodyForCarry(_heldBody);
+            return true;
+        }
+
+        // --- Interactable API (old system) ---
+
+        public bool TryPickUp(Interactable interactable)
+        {
+            if (interactable == null || IsCarrying) return false;
+
+            var body = interactable.GetComponentInChildren<Rigidbody>();
+            var colliders = interactable.GetComponentsInChildren<Collider>(true);
+
+            if (body == null)
+            {
+                foreach (var c in colliders)
+                {
+                    if (c is MeshCollider mesh && !mesh.convex)
+                    {
+                        mesh.convex = true;
+                        Debug.LogWarning($"[PlayerCarry] {interactable.name}: non-convex MeshCollider made convex for physics carry.", interactable);
+                    }
+                }
+                body = interactable.gameObject.AddComponent<Rigidbody>();
+            }
+
+            HeldInteractable = interactable;
+            HeldItem = null;
+            _heldBody = body;
+            _heldColliders = colliders;
+            _heldOriginalScale = interactable.transform.localScale;
+
+            PreparePickup(interactable.transform);
+            // Ignore player collision
+            SetPlayerCollisionIgnored(true);
+            // Configure body
+            SaveBodySettings(body);
+            body.isKinematic = false;
+            body.useGravity = false;
+            body.interpolation = RigidbodyInterpolation.Interpolate;
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            body.solverIterations = Mathf.Max(_savedSolverIterations, 16);
+            body.solverVelocityIterations = Mathf.Max(_savedSolverVelocityIterations, 8);
+            body.maxDepenetrationVelocity = 1.5f;
+            body.maxAngularVelocity = Mathf.Max(_savedMaxAngularVelocity, maxCarryAngularSpeed * Mathf.Deg2Rad);
+            body.linearDamping = Mathf.Max(_savedLinearDamping, carryDamping);
+            body.angularDamping = Mathf.Max(_savedAngularDamping, carryDamping);
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+            body.WakeUp();
+            _tunedBody = body;
+
+            if (interactable.pickupSound != null)
+                AudioSource.PlayClipAtPoint(interactable.pickupSound, interactable.transform.position);
+
+            return true;
+        }
+
+        private void PreparePickup(Transform itemTransform)
+        {
             var cam = Cam;
             var from = cam != null ? cam.transform.position : holdPoint.position;
-            _holdDistance = Mathf.Clamp(
-                Vector3.Distance(from, item.transform.position),
-                item.MinHoldDistance,
-                item.MaxHoldDistance);
-            if (_holdDistance < 0.05f)
-                _holdDistance = item.DefaultHoldDistance;
+            var dist = Vector3.Distance(from, itemTransform.position);
+            _holdDistance = Mathf.Clamp(dist, minHoldDistance, maxHoldDistance);
+            if (_holdDistance < 0.05f) _holdDistance = defaultHoldDistance;
 
             _planarOffset = Vector3.zero;
             _stuckTimer = 0f;
@@ -183,9 +245,7 @@ namespace GameAssets.Scripts.Puzzle
             _hasPreviousTarget = false;
             _targetVelocity = Vector3.zero;
             var playerYaw = YawRotation(playerBody.rotation);
-            _yawOffsetFromPlayer = Quaternion.Inverse(playerYaw) * item.transform.rotation;
-            TuneBodyForCarry(item.Body);
-            return true;
+            _yawOffsetFromPlayer = Quaternion.Inverse(playerYaw) * itemTransform.rotation;
         }
 
         public PlaceableItem TakeHeldItem()
@@ -194,32 +254,39 @@ namespace GameAssets.Scripts.Puzzle
             HeldItem = null;
             SpatialModeActive = false;
             RestoreBodyAfterCarry(true);
-            if (item != null)
-                item.SetHeld(false);
+            if (item != null) item.SetHeld(false);
             return item;
         }
 
         public void DropInWorld()
         {
-            if (!IsCarrying)
-                return;
+            if (!IsCarrying) return;
 
-            var item = HeldItem;
-            HeldItem = null;
-            SpatialModeActive = false;
+            if (HeldItem != null)
+            {
+                var item = HeldItem;
+                HeldItem = null;
+                SpatialModeActive = false;
+                RestoreBodyAfterCarry(true);
+                item.SetHeld(false);
+            }
+            else if (HeldInteractable != null)
+            {
+                var interactable = HeldInteractable;
+                HeldInteractable = null;
+                SpatialModeActive = false;
 
-            // Give back the body's damping and clamp the speed it leaves with:
-            // an item that was straining against an obstacle must not shoot
-            // off with the servo speed it had built up.
-            RestoreBodyAfterCarry(true);
+                if (interactable.dropSound != null)
+                    AudioSource.PlayClipAtPoint(interactable.dropSound, interactable.transform.position);
 
-            // Restores gravity, the body's original physics settings and
-            // collisions with the player. The item keeps its (clamped) momentum
-            // and simply falls where it is.
-            item.SetHeld(false);
+                interactable.transform.localScale = _heldOriginalScale;
+                RestoreBodyAfterCarry(true);
+                SetPlayerCollisionIgnored(false);
+                _heldBody = null;
+                _heldColliders = null;
+            }
         }
 
-        /// <summary>Called by a held item when it is destroyed or deactivated.</summary>
         public void NotifyHeldItemLost(PlaceableItem item)
         {
             if (HeldItem == item)
@@ -230,7 +297,17 @@ namespace GameAssets.Scripts.Puzzle
             }
         }
 
-        /// <summary>Mobile HUD: pointer down / up on a hold-to-move button.</summary>
+        public void NotifyHeldInteractableLost(Interactable interactable)
+        {
+            if (HeldInteractable == interactable)
+            {
+                HeldInteractable = null;
+                SpatialModeActive = false;
+                RestoreBodyAfterCarry(false);
+                SetPlayerCollisionIgnored(false);
+            }
+        }
+
         public void SetSpatialModeFromHud(bool held)
         {
             _hudSpatialHeld = held;
@@ -246,58 +323,48 @@ namespace GameAssets.Scripts.Puzzle
         private void UpdateSpatialInput()
         {
             var mouse = Mouse.current;
-            if (mouse == null)
-                return;
+            float scroll = 0f;
+            if (scrollAction != null)
+                scroll = scrollAction.action.ReadValue<Vector2>().y;
+            else if (mouse != null)
+                scroll = mouse.scroll.ReadValue().y;
 
-            var scroll = mouse.scroll.ReadValue().y;
             if (Mathf.Abs(scroll) > 0.01f)
             {
-                // Wheel up = away from camera, wheel down = toward camera.
                 var notches = scroll > 0f ? 1f : -1f;
-                if (Mathf.Abs(scroll) > 120f)
-                    notches = scroll / 120f;
-                _holdDistance = Mathf.Clamp(
-                    _holdDistance + notches * scrollMetersPerNotch,
-                    HeldItem.MinHoldDistance,
-                    HeldItem.MaxHoldDistance);
+                if (Mathf.Abs(scroll) > 120f) notches = scroll / 120f;
+                _holdDistance = Mathf.Clamp(_holdDistance + notches * scrollMetersPerNotch, minHoldDistance, maxHoldDistance);
             }
 
             RefreshSpatialMode();
 
-            if (SpatialModeActive)
+            if (SpatialModeActive && mouse != null)
             {
                 var delta = mouse.delta.ReadValue();
-                // Screen X → player local Y (up). Screen Y → player local Z (forward).
-                _planarOffset += playerBody.up * (delta.x * planeDragSensitivity);
-                _planarOffset += playerBody.forward * (delta.y * planeDragSensitivity);
+                // Flipped X/Y: X -> forward, Y -> up (intuitive, was opposite)
+                if (flipPlanarAxes)
+                {
+                    _planarOffset += playerBody.forward * (delta.x * planeDragSensitivity);
+                    _planarOffset += playerBody.up * (delta.y * planeDragSensitivity);
+                }
+                else
+                {
+                    _planarOffset += playerBody.up * (delta.x * planeDragSensitivity);
+                    _planarOffset += playerBody.forward * (delta.y * planeDragSensitivity);
+                }
             }
         }
 
-        /// <summary>
-        /// Steers the held body toward the target hold pose with a bounded
-        /// force and torque. The body stays dynamic with its colliders on, so
-        /// the physics engine resolves every contact — and because the push is
-        /// capped, an obstacle (or another prop between the item and a wall)
-        /// is never loaded with more than <see cref="maxCarryForce"/>: the item
-        /// stops against it instead of tunnelling or crushing it through.
-        /// </summary>
         private void DriveHeldBody()
         {
-            var item = HeldItem;
-            if (item == null)
-                return;
-
-            var body = item.Body;
-            if (body == null || body.isKinematic)
-                return;
+            var body = _heldBody;
+            if (body == null || body.isKinematic) return;
 
             var dt = Time.fixedDeltaTime;
-            var targetPos = ComputeTargetPosition(item);
-            var targetRot = ComputeTargetRotation(item);
+            var targetPos = ComputeTargetPosition();
+            var targetRot = ComputeTargetRotation();
             UpdateTargetVelocity(targetPos, dt);
 
-            // Drop the item when it cannot reach its target pose — pressed
-            // into a wall, snagged on a corner or wedged behind geometry.
             var toTarget = targetPos - body.position;
             var gap = toTarget.magnitude;
             var closingSpeed = gap > 1e-4f ? Vector3.Dot(body.linearVelocity, toTarget / gap) : 0f;
@@ -307,27 +374,19 @@ namespace GameAssets.Scripts.Puzzle
                 return;
             }
 
-            ApplyCarryForce(item, body, toTarget, gap, dt);
-            ApplyCarryTorque(item, body, targetRot, dt);
+            ApplyCarryForce(body, toTarget, gap, dt);
+            ApplyCarryTorque(body, targetRot, dt);
         }
 
-        /// <summary>
-        /// Linear servo: aim for a velocity that follows the hold point and
-        /// closes the remaining gap on a braking profile the force cap can
-        /// actually stop, then apply the force needed to reach that velocity
-        /// this step — clamped to the carry's force and acceleration limits.
-        /// </summary>
-        private void ApplyCarryForce(PlaceableItem item, Rigidbody body, Vector3 toTarget, float gap, float dt)
+        private void ApplyCarryForce(Rigidbody body, Vector3 toTarget, float gap, float dt)
         {
             var mass = Mathf.Max(0.01f, body.mass);
             var forceCap = Mathf.Min(maxCarryForce, mass * maxCarryAcceleration);
             var accelCap = forceCap / mass;
-            var maxSpeed = Mathf.Max(0.1f, item.MaxCarrySpeed);
+            var maxSpeed = Mathf.Max(0.1f, maxCarrySpeed);
+            // For Interactable, use maxCarrySpeed as well
+            if (HeldItem != null) maxSpeed = Mathf.Max(0.1f, HeldItem.MaxCarrySpeed);
 
-            // Feed-forward the target's own motion (player walking / turning),
-            // then add the gap-closing approach speed. The approach speed is
-            // the largest speed from which accelCap can still stop within the
-            // gap, so the item never overshoots its hold point and oscillates.
             var desiredVelocity = Vector3.ClampMagnitude(_targetVelocity, maxSpeed);
             if (gap > 1e-4f)
             {
@@ -335,30 +394,21 @@ namespace GameAssets.Scripts.Puzzle
                 desiredVelocity += toTarget * (approachSpeed / gap);
             }
 
-            // Force that would reach the desired velocity within this step,
-            // clamped to the cap. Gravity is disabled while held (PlaceableItem),
-            // so nothing else needs compensating. When an obstacle holds the
-            // item back the clamp is what the obstacle feels — never more.
             var neededForce = (desiredVelocity - body.linearVelocity) * (mass / dt);
             var force = Vector3.ClampMagnitude(neededForce, forceCap);
             body.AddForce(force, ForceMode.Force);
         }
 
-        /// <summary>
-        /// Angular servo toward the hold rotation using a bounded torque.
-        /// The desired angular acceleration is converted through the body's
-        /// inertia tensor, so oblong items turn evenly about every axis.
-        /// </summary>
-        private void ApplyCarryTorque(PlaceableItem item, Rigidbody body, Quaternion targetRot, float dt)
+        private void ApplyCarryTorque(Rigidbody body, Quaternion targetRot, float dt)
         {
             var deltaRot = targetRot * Quaternion.Inverse(body.rotation);
             deltaRot.ToAngleAxis(out var angleDeg, out var axis);
-            if (angleDeg > 180f)
-                angleDeg -= 360f;
+            if (angleDeg > 180f) angleDeg -= 360f;
 
-            var maxAngularSpeed = Mathf.Max(0.1f, item.MaxCarryAngularSpeed) * Mathf.Deg2Rad;
+            var maxAngularSpeed = maxCarryAngularSpeed * Mathf.Deg2Rad;
+            if (HeldItem != null) maxAngularSpeed = Mathf.Max(0.1f, HeldItem.MaxCarryAngularSpeed) * Mathf.Deg2Rad;
+
             var desiredAngularVelocity = Vector3.zero;
-
             if (Mathf.Abs(angleDeg) > 0.05f && axis.sqrMagnitude > 1e-6f)
             {
                 axis.Normalize();
@@ -367,9 +417,6 @@ namespace GameAssets.Scripts.Puzzle
                 desiredAngularVelocity = axis * (Mathf.Sign(angleRad) * speed);
             }
 
-            // Angular acceleration (rad/s²) needed to reach the desired angular
-            // velocity within this step, capped, then converted to a torque
-            // through the body's inertia tensor so mass distribution matters.
             var angularAccel = (desiredAngularVelocity - body.angularVelocity) / dt;
             angularAccel = Vector3.ClampMagnitude(angularAccel, maxCarryAngularAcceleration);
 
@@ -378,18 +425,12 @@ namespace GameAssets.Scripts.Puzzle
             body.AddTorque(torque, ForceMode.Force);
         }
 
-        /// <summary>
-        /// Largest speed that can still be brought to rest within
-        /// <paramref name="distance"/> under <paramref name="decel"/>, allowing
-        /// for one discrete step of travel before braking begins.
-        /// </summary>
         private static float BrakingSpeed(float distance, float decel, float dt)
         {
             var step = decel * dt;
             return Mathf.Sqrt(step * step + 2f * decel * distance) - step;
         }
 
-        /// <summary>World-space torque that produces <paramref name="angularAccel"/> on this body.</summary>
         private static Vector3 InertiaTensorTimes(Rigidbody body, Vector3 angularAccel)
         {
             var tensorRot = body.rotation * body.inertiaTensorRotation;
@@ -399,12 +440,6 @@ namespace GameAssets.Scripts.Puzzle
             return tensorRot * local;
         }
 
-        /// <summary>
-        /// Estimates how fast the hold pose is moving (player walking, turning,
-        /// scrolling the item) so the servo can follow it without lagging.
-        /// Lightly filtered because the player's CharacterController moves in
-        /// Update while this runs in FixedUpdate.
-        /// </summary>
         private void UpdateTargetVelocity(Vector3 targetPos, float dt)
         {
             if (_hasPreviousTarget)
@@ -417,41 +452,58 @@ namespace GameAssets.Scripts.Puzzle
                 _targetVelocity = Vector3.zero;
                 _hasPreviousTarget = true;
             }
-
             _previousTargetPos = targetPos;
         }
 
-        /// <summary>
-        /// Adds damping for the duration of the carry. Without it a capped
-        /// force leaves the item free to wobble around the hold point or keep
-        /// sliding along a wall after a push; with it the carry feels held.
-        /// </summary>
-        private void TuneBodyForCarry(Rigidbody body)
+        private void SaveBodySettings(Rigidbody body)
         {
-            if (body == null)
-                return;
-
-            _tunedBody = body;
+            if (body == null) return;
             _savedLinearDamping = body.linearDamping;
             _savedAngularDamping = body.angularDamping;
+            _savedInterpolation = body.interpolation;
+            _savedCollisionDetection = body.collisionDetectionMode;
+            _savedMaxDepenetrationVelocity = body.maxDepenetrationVelocity;
+            _savedMaxAngularVelocity = body.maxAngularVelocity;
+            _savedSolverIterations = body.solverIterations;
+            _savedSolverVelocityIterations = body.solverVelocityIterations;
+            _savedWasKinematic = body.isKinematic;
+            _savedUseGravity = body.useGravity;
+        }
 
+        private void TuneBodyForCarry(Rigidbody body)
+        {
+            if (body == null) return;
+            SaveBodySettings(body);
+            _tunedBody = body;
             body.linearDamping = Mathf.Max(body.linearDamping, carryDamping);
             body.angularDamping = Mathf.Max(body.angularDamping, carryDamping);
         }
 
-        /// <summary>Restores the body's own damping and, optionally, clamps the speed it is released with.</summary>
         private void RestoreBodyAfterCarry(bool clampReleaseSpeed)
         {
-            var body = _tunedBody;
+            var body = _tunedBody ?? _heldBody;
             _tunedBody = null;
+            _heldBody = null;
             _hasPreviousTarget = false;
             _targetVelocity = Vector3.zero;
 
-            if (body == null)
-                return;
+            if (body == null) return;
 
             body.linearDamping = _savedLinearDamping;
             body.angularDamping = _savedAngularDamping;
+            body.interpolation = _savedInterpolation;
+            body.collisionDetectionMode = _savedCollisionDetection;
+            if (_savedMaxDepenetrationVelocity >= 0f) body.maxDepenetrationVelocity = _savedMaxDepenetrationVelocity;
+            if (_savedMaxAngularVelocity >= 0f) body.maxAngularVelocity = _savedMaxAngularVelocity;
+            if (_savedSolverIterations > 0) body.solverIterations = _savedSolverIterations;
+            if (_savedSolverVelocityIterations > 0) body.solverVelocityIterations = _savedSolverVelocityIterations;
+
+            // For PlaceableItem, SetHeld restores kinematic/gravity, for Interactable we restore here
+            if (HeldItem == null && HeldInteractable == null)
+            {
+                body.isKinematic = _savedWasKinematic;
+                body.useGravity = _savedUseGravity;
+            }
 
             if (clampReleaseSpeed && !body.isKinematic)
             {
@@ -460,14 +512,20 @@ namespace GameAssets.Scripts.Puzzle
             }
         }
 
-        /// <summary>
-        /// True when the item has been far from its target without making any
-        /// progress for <see cref="stuckDropDelay"/> seconds. Items flying to
-        /// the player after pickup, or heavy items trailing a sprinting player,
-        /// are still moving toward the hand and never count as stuck; only an
-        /// item that is held back by something (its closing speed killed by a
-        /// contact) runs the timer down.
-        /// </summary>
+        private void SetPlayerCollisionIgnored(bool ignored)
+        {
+            if (_heldColliders == null) return;
+            foreach (var pc in PlayerColliders)
+            {
+                if (pc == null) continue;
+                foreach (var hc in _heldColliders)
+                {
+                    if (hc == null) continue;
+                    Physics.IgnoreCollision(hc, pc, ignored);
+                }
+            }
+        }
+
         private bool IsStuckForTooLong(float gap, float closingSpeed)
         {
             if (gap <= stuckDropGap)
@@ -476,23 +534,32 @@ namespace GameAssets.Scripts.Puzzle
                 _bestGap = gap;
                 return false;
             }
-
             if (gap < _bestGap - 0.01f || closingSpeed > 0.15f)
             {
-                // Still closing in on (or chasing) the target — not stuck.
                 _bestGap = Mathf.Min(_bestGap, gap);
                 _stuckTimer = 0f;
                 return false;
             }
-
             _stuckTimer += Time.fixedDeltaTime;
             return _stuckTimer >= stuckDropDelay;
         }
 
-        private Vector3 ComputeTargetPosition(PlaceableItem item)
+        private Vector3 ComputeTargetPosition()
         {
-            if (item.RotateWithHolder)
-                return holdPoint.position;
+            Transform itemTransform = null;
+            bool rotateWithHolder = false;
+            if (HeldItem != null)
+            {
+                itemTransform = HeldItem.transform;
+                rotateWithHolder = HeldItem.RotateWithHolder;
+            }
+            else if (HeldInteractable != null)
+            {
+                itemTransform = HeldInteractable.transform;
+                rotateWithHolder = false;
+            }
+
+            if (rotateWithHolder) return holdPoint.position;
 
             var cam = Cam;
             var origin = cam != null ? cam.transform.position : holdPoint.position;
@@ -500,17 +567,21 @@ namespace GameAssets.Scripts.Puzzle
             return origin + alongCam * _holdDistance + _planarOffset;
         }
 
-        private Quaternion ComputeTargetRotation(PlaceableItem item)
+        private Quaternion ComputeTargetRotation()
         {
-            return item.RotateWithHolder
-                ? holdPoint.rotation
-                : YawRotation(playerBody.rotation) * _yawOffsetFromPlayer;
+            if (HeldItem != null)
+                return HeldItem.RotateWithHolder ? holdPoint.rotation : YawRotation(playerBody.rotation) * _yawOffsetFromPlayer;
+            else
+                return YawRotation(playerBody.rotation) * _yawOffsetFromPlayer;
         }
 
         private void RefreshSpatialMode()
         {
             var mmb = Mouse.current != null && Mouse.current.middleButton.isPressed;
-            SpatialModeActive = HeldItem != null && HeldItem.UsesSpatialCarry && (mmb || _hudSpatialHeld);
+            bool usesSpatial = HeldItem != null ? HeldItem.UsesSpatialCarry : true; // Interactable allows spatial too
+            SpatialModeActive = IsCarrying && usesSpatial && (mmb || _hudSpatialHeld || !spatialModeRequiresMMB);
+            if (spatialModeRequiresMMB)
+                SpatialModeActive = IsCarrying && usesSpatial && (mmb || _hudSpatialHeld);
         }
 
         private Collider[] PlayerColliders
@@ -519,11 +590,7 @@ namespace GameAssets.Scripts.Puzzle
             {
                 if (_playerColliders == null || _playerColliders.Length == 0)
                 {
-                    if (playerBody != null)
-                        _playerColliders = playerBody.GetComponentsInChildren<Collider>();
-
-                    // Fallback for setups where this component sits on a child
-                    // (e.g. the camera rig) rather than the player root.
+                    if (playerBody != null) _playerColliders = playerBody.GetComponentsInChildren<Collider>();
                     if ((_playerColliders == null || _playerColliders.Length == 0) && playerBody != null)
                         _playerColliders = playerBody.transform.root.GetComponentsInChildren<Collider>();
                 }
@@ -532,7 +599,6 @@ namespace GameAssets.Scripts.Puzzle
         }
 
         private Camera Cam => viewCamera != null ? viewCamera : Camera.main;
-
         private static Quaternion YawRotation(Quaternion rot)
         {
             var e = rot.eulerAngles;
@@ -540,17 +606,13 @@ namespace GameAssets.Scripts.Puzzle
         }
 
         private void OnDrop(InputAction.CallbackContext ctx) => DropInWorld();
-
         private void OnSpatialStarted(InputAction.CallbackContext ctx)
         {
-            if (HeldItem != null && HeldItem.UsesSpatialCarry)
-                SpatialModeActive = true;
+            if (IsCarrying) SpatialModeActive = true;
         }
-
         private void OnSpatialCanceled(InputAction.CallbackContext ctx)
         {
-            if (!_hudSpatialHeld)
-                SpatialModeActive = false;
+            if (!_hudSpatialHeld) SpatialModeActive = false;
         }
 
         private static void Bind(InputActionReference reference, System.Action<InputAction.CallbackContext> cb, bool started)
@@ -560,7 +622,6 @@ namespace GameAssets.Scripts.Puzzle
             if (started) reference.action.started += cb;
             else reference.action.canceled += cb;
         }
-
         private static void Unbind(InputActionReference reference, System.Action<InputAction.CallbackContext> cb, bool started)
         {
             if (reference == null) return;
