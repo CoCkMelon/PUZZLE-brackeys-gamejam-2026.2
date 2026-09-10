@@ -33,7 +33,7 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private float maxCarryAngularSpeed = 720f;
 
         [Header("Carry - Interactable (old) support")]
-        [SerializeField, Range(0.05f, 1f)] private float interactableScaleMultiplier = 0.65f;
+        [SerializeField, Range(0.05f, 1f)] private float interactableScaleMultiplier = 1f; // fixed - was 0.65 causing shrink bug
         [SerializeField] private float interactableFollowTimeScale = 1f; // extra lerp for scale
 
         [Header("Auto-drop")]
@@ -140,13 +140,8 @@ namespace GameAssets.Scripts.Puzzle
 
             if (!IsCarrying) return;
 
-            // Scale lerp for Interactable
-            if (HeldInteractable != null)
-            {
-                var t = HeldInteractable.transform;
-                var lerpFactor = 1f - Mathf.Exp(-10f * Time.deltaTime * interactableFollowTimeScale);
-                t.localScale = Vector3.Lerp(t.localScale, _heldOriginalScale * interactableScaleMultiplier, lerpFactor);
-            }
+            // No scale change - keep original scale while carried (was shrinking bug)
+            // Previously lerped to _heldOriginalScale * interactableScaleMultiplier (0.65)
 
             // Spatial input only for items that use spatial or for Interactable if we allow
             if (HeldItem != null && !HeldItem.UsesSpatialCarry) return;
