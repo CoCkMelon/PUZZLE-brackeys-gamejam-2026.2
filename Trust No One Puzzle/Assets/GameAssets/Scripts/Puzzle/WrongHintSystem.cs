@@ -4,12 +4,15 @@ using UnityEngine;
 namespace GameAssets.Scripts.Puzzle
 {
     /// <summary>
-    /// Phone / narrator hints. Some are true, some are deliberately wrong
-    /// ("Trust No One"). Wrong placements and locked drawers can trigger
-    /// extra misleading messages.
+    /// Phone / narrator hints. Some are true, some are deliberately wrong ("Trust No One").
+    /// Now fully decoupled from old Canvas DialogueManager - uses PuzzleEvents.HintRequested
+    /// which MobilePhoneController (UI Toolkit) listens to.
+    /// Supports trigger-based messages via SendHintById / SendCustom / PhoneMessageTrigger.
     /// </summary>
     public class WrongHintSystem : MonoBehaviour
     {
+        public static WrongHintSystem Instance { get; private set; }
+
         [System.Serializable]
         public class HintEntry
         {
@@ -31,6 +34,7 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private bool sendRandomWrongHintOnWrongPlacement = true;
         [SerializeField] [Range(0f, 1f)] private float wrongHintChance = 0.7f;
         [SerializeField] private bool neverRepeat = true;
+        [SerializeField] private bool logToConsole = true;
 
         [Header("Fallback copy")]
         [SerializeField] [TextArea] private string genericWrongHint =
@@ -39,11 +43,20 @@ namespace GameAssets.Scripts.Puzzle
             "That looks right. Keep going.";
 
         private readonly HashSet<string> _sent = new HashSet<string>();
-        private DialogueManager _dialogue;
 
         private void Awake()
         {
-            _dialogue = FindFirstObjectByType<DialogueManager>();
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+        }
+
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
         }
 
         private void OnEnable()
@@ -62,13 +75,17 @@ namespace GameAssets.Scripts.Puzzle
 
         public void SendHintById(string id)
         {
+            if (string.IsNullOrWhiteSpace(id)) return;
             var entry = hints.Find(h => h.id == id);
             if (entry != null)
                 Push(entry);
+            else
+                Debug.LogWarning($"[WrongHintSystem] Hint id '{id}' not found.");
         }
 
         public void SendCustom(string text, bool misleading, string sourceId = "custom")
         {
+            if (string.IsNullOrWhiteSpace(text)) return;
             Push(new HintMessage
             {
                 text = text,
@@ -77,8 +94,15 @@ namespace GameAssets.Scripts.Puzzle
             });
         }
 
+        /// <summary>Helper for UnityEvent wiring - sends custom text as misleading or not.</summary>
+        public void SendCustomFromTrigger(string text) => SendCustom(text, false, "trigger");
+        public void SendMisleadingFromTrigger(string text) => SendCustom(text, true, "trigger-misleading");
+
+        public void ClearHistory() => _sent.Clear();
+
         private void HandleWrongPlacement(PlacementSlot slot, PlaceableItem item)
         {
+            if (slot == null) return;
             var specific = hints.Find(h =>
                 !string.IsNullOrEmpty(h.triggerOnWrongSlotId) &&
                 h.triggerOnWrongSlotId == slot.SlotId);
@@ -103,6 +127,7 @@ namespace GameAssets.Scripts.Puzzle
 
         private void HandleCorrectPlacement(PlacementSlot slot, PlaceableItem item)
         {
+            if (slot == null) return;
             var specific = hints.Find(h =>
                 !string.IsNullOrEmpty(h.triggerOnCorrectSlotId) &&
                 h.triggerOnCorrectSlotId == slot.SlotId);
@@ -113,7 +138,9 @@ namespace GameAssets.Scripts.Puzzle
                 return;
             }
 
-            SendCustom(genericCorrectHint, false, "generic-correct");
+            // Optional generic correct hint - can be disabled by leaving empty
+            if (!string.IsNullOrWhiteSpace(genericCorrectHint))
+                SendCustom(genericCorrectHint, false, "generic-correct");
         }
 
         private void HandleDrawerUnlocked(string drawerId)
@@ -128,10 +155,13 @@ namespace GameAssets.Scripts.Puzzle
 
         private void Push(HintEntry entry)
         {
+            if (entry == null || string.IsNullOrWhiteSpace(entry.text)) return;
             if (neverRepeat && _sent.Contains(entry.id))
                 return;
 
-            _sent.Add(entry.id);
+            if (!string.IsNullOrEmpty(entry.id))
+                _sent.Add(entry.id);
+
             Push(new HintMessage
             {
                 text = entry.text,
@@ -143,16 +173,8 @@ namespace GameAssets.Scripts.Puzzle
         private void Push(HintMessage message)
         {
             PuzzleEvents.RaiseHint(message);
-
-            if (_dialogue != null)
-            {
-                var prefix = message.isMisleading ? "[???] " : "[hint] ";
-                _dialogue.SendChatMessage(prefix + message.text);
-            }
-            else
-            {
-                Debug.Log($"[Hint{(message.isMisleading ? " WRONG" : "")}] {message.text}");
-            }
+            if (logToConsole)
+                Debug.Log($"[Hint{(message.isMisleading ? " WRONG" : "")}] {message.text} (src:{message.sourceId})");
         }
     }
 }
