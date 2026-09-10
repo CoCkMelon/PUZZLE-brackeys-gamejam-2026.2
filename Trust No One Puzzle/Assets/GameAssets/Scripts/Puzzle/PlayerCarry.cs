@@ -33,7 +33,6 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private float maxCarryAngularSpeed = 720f;
 
         [Header("Carry - Interactable (old) support")]
-        [SerializeField, Range(0.05f, 1f)] private float interactableScaleMultiplier = 1f; // fixed - was 0.65 causing shrink bug
         [SerializeField] private float interactableFollowTimeScale = 1f; // extra lerp for scale
 
         [Header("Auto-drop")]

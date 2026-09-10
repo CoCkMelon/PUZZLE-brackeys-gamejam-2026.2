@@ -291,10 +291,22 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 7076101939358636472}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
-  unlockWithKey: 1
+  unlockWithKey: 0
   keyAccess: 2
   consumeKey: 1
   openWhenUnlocked: 1
@@ -502,6 +514,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -629,6 +653,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -679,6 +715,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -1411,6 +1459,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 115, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -1565,6 +1625,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -2162,6 +2234,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: -1, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 1
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -2254,6 +2338,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 1
   requiredKey: {fileID: 609256651}
   requiredKeyId: 
@@ -2370,6 +2466,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -3277,6 +3385,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -4679,6 +4799,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: -45, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -5516,6 +5648,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: -105, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -5623,6 +5767,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -9936,6 +10092,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: -100, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -11488,6 +11656,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -11832,6 +12012,18 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
+  usePhysics: 1
+  movingRigidbody: {fileID: 0}
+  maxForce: 400
+  maxTorque: 150
+  maxAcceleration: 40
+  maxAngularAcceleration: 360
+  linearDamping: 2
+  angularDamping: 5
+  positionThreshold: 0.005
+  rotationThreshold: 0.5
+  maxLinearSpeed: 2
+  maxAngularSpeed: 120
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
