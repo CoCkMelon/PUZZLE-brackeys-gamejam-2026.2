@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using GameAssets.Scripts.Environment;
 using GameAssets.Scripts.Interaction;
 using UnityEngine;
 using UnityEngine.Events;
@@ -6,7 +7,7 @@ using UnityEngine.Events;
 namespace GameAssets.Scripts.Puzzle
 {
     /// <summary>
-    /// Unlocks one or more <see cref="OpenableInteractable"/> drawers when
+    /// Unlocks one or more <see cref="OpenableFurniture"/> furniture drawers when
     /// placement conditions are met (all listed slots correct, or any of them).
     /// </summary>
     public class DrawerUnlockTrigger : MonoBehaviour
@@ -22,7 +23,7 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private Condition condition = Condition.AllSlotsCorrect;
         [SerializeField] private List<PlacementSlot> requiredSlots = new List<PlacementSlot>();
         [SerializeField] private string requiredItemId;
-        [SerializeField] private List<OpenableInteractable> drawers = new List<OpenableInteractable>();
+        [SerializeField] private List<OpenableFurniture> drawers = new List<OpenableFurniture>();
         [SerializeField] private bool lockAgainIfUnsolved;
         [SerializeField] private bool unlockOnce = true;
 

@@ -43,9 +43,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 151088739143321002}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 64b2f0a928792964d8a392a76d8cf878, type: 3}
+  m_Script: {fileID: 11500000, guid: d95cdb25c7fcbb4f3b2e57c000cc80c8, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.MirrorReflectionSystem
+  m_EditorClassIdentifier: Assembly-CSharp::PerfectMirror
   player: {fileID: 0}
   mirrorCam: {fileID: 5051805794486252853}
 --- !u!1 &677146014766049763

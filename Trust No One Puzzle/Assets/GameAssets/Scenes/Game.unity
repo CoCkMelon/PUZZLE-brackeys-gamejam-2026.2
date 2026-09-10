@@ -2021,9 +2021,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 3743983286992850556}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 7339a469334e75342ab8f0d8700e7b87, type: 3}
+  m_Script: {fileID: 11500000, guid: 7f8c5822e98448c2997436c6433420df, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Interaction.OpenableInteractable
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.OpenableFurniture
   movingPart: {fileID: 0}
   openMode: 0
   openRotation: {x: 0, y: -1, z: 0}
@@ -3150,9 +3150,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 803057053}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: b67d1f86c2dc4a0f8cfbf9bd00a7e7f9, type: 3}
+  m_Script: {fileID: 11500000, guid: 0ba1389fa645b275bace3c7e6ee8efad, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Hints.WrongHintSystem
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Puzzle.WrongHintSystem
   hintPrefab: {fileID: 7843629100090928690, guid: 73b650933d81a7a4580a2a248d0adfa0, type: 3}
   hintParent: {fileID: 1501212478}
   hintSource: {fileID: 803057054}
@@ -5070,9 +5070,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 1973084372181529839}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 7339a469334e75342ab8f0d8700e7b87, type: 3}
+  m_Script: {fileID: 11500000, guid: 7f8c5822e98448c2997436c6433420df, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Interaction.OpenableInteractable
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.OpenableFurniture
   movingPart: {fileID: 0}
   openMode: 0
   openRotation: {x: 0, y: -45, z: 0}
@@ -5310,7 +5310,7 @@ MonoBehaviour:
     m_PersistentCalls:
       m_Calls:
       - m_Target: {fileID: 803057055}
-        m_TargetAssemblyTypeName: GameAssets.Scripts.Hints.WrongHintSystem, Assembly-CSharp
+        m_TargetAssemblyTypeName: GameAssets.Scripts.Puzzle.WrongHintSystem, Assembly-CSharp
         m_MethodName: SpawnHint
         m_Mode: 3
         m_Arguments:
@@ -10299,9 +10299,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 6447738115165514762}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 7339a469334e75342ab8f0d8700e7b87, type: 3}
+  m_Script: {fileID: 11500000, guid: 7f8c5822e98448c2997436c6433420df, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Interaction.OpenableInteractable
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.OpenableFurniture
   movingPart: {fileID: 0}
   openMode: 0
   openRotation: {x: 0, y: -100, z: 0}

@@ -498,7 +498,7 @@ MonoBehaviour:
     m_PersistentCalls:
       m_Calls:
       - m_Target: {fileID: 2041290739}
-        m_TargetAssemblyTypeName: GameAssets.Scripts.Hints.WrongHintSystem, Assembly-CSharp
+        m_TargetAssemblyTypeName: GameAssets.Scripts.Puzzle.WrongHintSystem, Assembly-CSharp
         m_MethodName: SpawnHint
         m_Mode: 3
         m_Arguments:
@@ -845,9 +845,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 2041290733}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: b67d1f86c2dc4a0f8cfbf9bd00a7e7f9, type: 3}
+  m_Script: {fileID: 11500000, guid: 0ba1389fa645b275bace3c7e6ee8efad, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Hints.WrongHintSystem
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Puzzle.WrongHintSystem
   hintPrefab: {fileID: 7843629100090928690, guid: 73b650933d81a7a4580a2a248d0adfa0, type: 3}
   hintParent: {fileID: 2041290734}
   hintSource: {fileID: 2041290738}
