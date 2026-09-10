@@ -1,0 +1,135 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1c4c5a2fb0704b94ba9cd2cc2b332b39, type: 3}
+  m_Name: ExampleMessages
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.UI.Mobile.PhoneExampleMessages
+  examples:
+  - id: msg-01-wrong-note
+    text: Don't trust the note in the top drawer. It's lying to you.
+    isMisleading: 1
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-02-key-under-plant
+    text: The silver key is under the potted plant in the corner. Check again, you missed it.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: plant-drawer
+  - id: msg-03-red-crate-wrong
+    text: I saw someone move the red crate to the left slot. That's wrong, put it right.
+    isMisleading: 1
+    triggerOnWrongSlotId: slot-red-left
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-04-mirror-truth
+    text: The mirror shows the truth, but only when the lights are off. Look at the reflection.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-05-blue-book
+    text: Blue book goes in the top drawer, not bottom. Trust me.
+    isMisleading: 1
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: slot-blue-bottom
+    triggerOnDrawerId: 
+  - id: msg-06-toolbox-key
+    text: Toolbox needs the rusty silver key, not the gold one. Gold is for the desk.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-07-code
+    text: He said code is 3-1-4, but I swear it's 1-4-3. Don't listen to him.
+    isMisleading: 1
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-08-behind-mirror
+    text: Check behind the mirror. There's a hidden compartment with a note.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: mirror-secret
+  - id: msg-09-third-drawer-trap
+    text: Don't open the third drawer. It's trapped and will reset everything.
+    isMisleading: 1
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-10-ghost-not-real
+    text: The ghost in the mirror is not real. It's just light + dust. Ignore it.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-11-hammer-kitchen
+    text: I left the hammer in the kitchen, under the sink. Use it to open the crate.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-12-placement-green-red-blue
+    text: Correct placement is green left, red right, blue middle. Do it now.
+    isMisleading: 1
+    triggerOnWrongSlotId: slot-green-left
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-13-code-changed
+    text: They changed the code. New code is 7-2-9. Old one won't work.
+    isMisleading: 1
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-14-trust-no-one
+    text: Remember Trust No One. Even me. Especially me.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-15-phone-bugged
+    text: Your phone is bugged. Don't answer unknown numbers. They're listening.
+    isMisleading: 1
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-16-reflection-key
+    text: Look at the reflection. The real key is on the other side of the room.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-17-scratch-drawer
+    text: The drawer with the scratch opens with the rusty key. Not the shiny one.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: scratch-drawer
+  - id: msg-18-note-under-rug
+    text: I hid the spare note under the rug near the door. Don't tell anyone.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-19-generic-wrong
+    text: That slot is wrong. Try the other one. You're messing it up.
+    isMisleading: 1
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: 
+    triggerOnDrawerId: 
+  - id: msg-20-almost-done
+    text: You are close. One more correct placement and the desk drawer unlocks.
+    isMisleading: 0
+    triggerOnWrongSlotId: 
+    triggerOnCorrectSlotId: slot-near-complete
+    triggerOnDrawerId: 
