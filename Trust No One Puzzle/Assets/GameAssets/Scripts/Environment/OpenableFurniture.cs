@@ -10,20 +10,16 @@ using GameAssets.Scripts.Puzzle;
 namespace GameAssets.Scripts.Environment
 {
     /// <summary>
-    /// Opens a door by rotating its pivot or opens a drawer by sliding it.
-    /// NOW USES RIGIDBODY FORCE to prevent penetration (was direct transform lerp).
-    /// The object holding this component needs a collider that can be hit by the player's reticle ray.
-    ///
-    /// Optional lock: tick Starts Locked and the furniture refuses to open until it is unlocked.
+    /// Opens door/drawer using Rigidbody joints to prevent penetration.
+    /// When locked: Rigidbody disabled (isKinematic true, joint locked at 0).
+    /// When unlocked: Rigidbody enabled (isKinematic false), joint allows movement.
+    /// Player can push or use PlayerCarry (force-limited) to move it - same carry system moves furniture.
+    /// Supports HingeJoint for Rotate and ConfigurableJoint for Slide.
     /// </summary>
     [RequireComponent(typeof(Collider))]
     public class OpenableFurniture : MonoBehaviour
     {
-        private enum OpenMode
-        {
-            Rotate,
-            Slide
-        }
+        private enum OpenMode { Rotate, Slide }
 
         [Header("References")]
         [SerializeField] private Transform movingPart;
@@ -35,7 +31,6 @@ namespace GameAssets.Scripts.Environment
         [SerializeField] private LayerMask interactionLayers = ~0;
 
         [Header("Interaction")]
-        [Tooltip("Key the player presses while looking at the furniture to open / close / unlock it.")]
         [SerializeField] private Key interactKey = Key.E;
 
         [Header("Opening")]
@@ -44,33 +39,22 @@ namespace GameAssets.Scripts.Environment
         [SerializeField] private Vector3 openOffset = new Vector3(0f, 0f, 0.4f);
         [SerializeField, Min(0.1f)] private float openSpeed = 8f;
 
-        [Header("Physics - Prevent Penetration")]
-        [Tooltip("If true, uses Rigidbody force/torque to move, respecting collisions. If false, falls back to direct lerp (old, can penetrate).")]
-        [SerializeField] private bool usePhysics = true;
-        [Tooltip("Rigidbody of the moving part. If null, will try GetComponent on movingPart.")]
+        [Header("Physics - Joint Based (no penetration)")]
+        [Tooltip("Use joint + Rigidbody instead of direct transform. Prevents penetration.")]
+        [SerializeField] private bool useJoint = true;
+        [Tooltip("Rigidbody of moving part. Auto-found if null.")]
         [SerializeField] private Rigidbody movingRigidbody;
-        [Tooltip("Max force applied to slide (N). Caps penetration.")]
-        [SerializeField, Min(1f)] private float maxForce = 400f;
-        [Tooltip("Max torque applied to rotate (Nm).")]
-        [SerializeField, Min(1f)] private float maxTorque = 150f;
-        [Tooltip("Max linear acceleration (m/s2) - further caps force by mass.")]
-        [SerializeField, Min(1f)] private float maxAcceleration = 40f;
-        [Tooltip("Max angular acceleration (deg/s2).")]
-        [SerializeField, Min(10f)] private float maxAngularAcceleration = 360f;
-        [Tooltip("Linear damping while moving (helps stop).")]
-        [SerializeField, Min(0f)] private float linearDamping = 2f;
-        [Tooltip("Angular damping while moving.")]
-        [SerializeField, Min(0f)] private float angularDamping = 5f;
-        [Tooltip("Consider open/closed reached within this distance (m).")]
-        [SerializeField, Min(0.001f)] private float positionThreshold = 0.005f;
-        [Tooltip("Consider rotation reached within this angle (deg).")]
-        [SerializeField, Min(0.1f)] private float rotationThreshold = 0.5f;
-        [Tooltip("Max linear speed for physics move (m/s).")]
-        [SerializeField, Min(0.1f)] private float maxLinearSpeed = 2f;
-        [Tooltip("Max angular speed (deg/s).")]
-        [SerializeField, Min(10f)] private float maxAngularSpeed = 120f;
+        [Tooltip("When locked, Rigidbody is disabled (isKinematic true). When unlocked, enabled (isKinematic false) so PlayerCarry can move it.")]
+        [SerializeField] private bool disableRigidbodyWhenLocked = true;
+        [Tooltip("Max force for auto open/close motor.")]
+        [SerializeField] private float jointMotorForce = 500f;
+        [Tooltip("Spring strength for joint.")]
+        [SerializeField] private float jointSpring = 500f;
+        [SerializeField] private float jointDamper = 50f;
+        [Tooltip("If true, player must physically push door (no auto motor). If false, motor drives to open/closed.")]
+        [SerializeField] private bool requirePlayerPush = false;
 
-        [Header("Lock (Optional)")]
+        [Header("Lock")]
         [SerializeField] private bool startsLocked;
         [SerializeField] private GameObject requiredKey;
         [SerializeField] private string requiredKeyId;
@@ -95,7 +79,6 @@ namespace GameAssets.Scripts.Environment
         public UnityEvent OnLockedAttempt;
 
         private readonly RaycastHit[] _reticleHits = new RaycastHit[32];
-
         private Quaternion _closedRotation;
         private Quaternion _openRotation;
         private Vector3 _closedPosition;
@@ -103,10 +86,13 @@ namespace GameAssets.Scripts.Environment
         private bool _isOpen;
         private bool _isLocked;
 
-        // Physics state
-        private float _savedLinearDamping;
-        private float _savedAngularDamping;
-        private bool _wasKinematic;
+        // Joint refs
+        private HingeJoint _hinge;
+        private ConfigurableJoint _configurable;
+        private Rigidbody _parentRigidbody;
+        private float _openAngle;
+        private Vector3 _slideAxis;
+        private float _slideDistance;
 
         public bool IsOpen => _isOpen;
         public bool IsLocked => _isLocked;
@@ -115,8 +101,7 @@ namespace GameAssets.Scripts.Environment
 
         private void Awake()
         {
-            if (movingPart == null)
-                movingPart = transform;
+            if (movingPart == null) movingPart = transform;
 
             _closedRotation = movingPart.localRotation;
             _openRotation = _closedRotation * Quaternion.Euler(openRotation);
@@ -127,51 +112,215 @@ namespace GameAssets.Scripts.Environment
             if (playerCameraController == null)
                 playerCameraController = FindFirstObjectByType<FPPCameraController>();
 
-            // Try to get Rigidbody
             if (movingRigidbody == null)
                 movingRigidbody = movingPart.GetComponent<Rigidbody>();
 
-            // If no Rigidbody and usePhysics true, create one (non-kinematic, with constraints)
-            if (usePhysics && movingRigidbody == null)
+            if (movingRigidbody == null && useJoint)
             {
-                // For physics movement we need a Rigidbody. If not present, we will fallback to kinematic lerp
-                // but log warning so designer adds one with proper collider
-                Debug.LogWarning($"[OpenableFurniture] {name}: usePhysics enabled but no Rigidbody on movingPart {movingPart.name}. Add Rigidbody (mass 5-20, drag 1, angular drag 5) and BoxCollider. Falling back to lerp which can penetrate.", this);
+                Debug.LogWarning($"[OpenableFurniture] {name}: useJoint enabled but no Rigidbody on {movingPart.name}. Add Rigidbody (mass 5-20, drag 1, angular drag 5, Continuous).", this);
             }
-            else if (movingRigidbody != null)
+
+            // Find parent Rigidbody for joint connection (if any)
+            if (movingPart.parent != null)
+                _parentRigidbody = movingPart.parent.GetComponentInParent<Rigidbody>();
+
+            // Precompute open angle and slide axis
+            _openAngle = openRotation.magnitude;
+            // For hinge, axis is normalized openRotation vector
+            _slideAxis = openOffset.normalized;
+            _slideDistance = openOffset.magnitude;
+
+            if (useJoint && movingRigidbody != null)
             {
-                _savedLinearDamping = movingRigidbody.linearDamping;
-                _savedAngularDamping = movingRigidbody.angularDamping;
-                _wasKinematic = movingRigidbody.isKinematic;
-                // Ensure Rigidbody can be moved by forces but still respects collision
-                movingRigidbody.isKinematic = false;
-                movingRigidbody.useGravity = false;
-                // Keep original constraints? For door rotate, we want to allow rotation, but prevent unwanted axes?
-                // We don't enforce constraints here - designer can set them (e.g. freeze position for rotate door)
+                SetupJoint();
+                ApplyLockState(); // sets isKinematic and joint limits based on locked
             }
 
             SetPromptVisible(false);
         }
 
-        private void OnDestroy()
+        private void SetupJoint()
         {
-            if (movingRigidbody != null)
+            if (movingRigidbody == null) return;
+
+            // Ensure Rigidbody settings for no penetration
+            movingRigidbody.useGravity = false;
+            movingRigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+            movingRigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            movingRigidbody.linearDamping = 1f;
+            movingRigidbody.angularDamping = 5f;
+
+            if (openMode == OpenMode.Rotate)
             {
-                movingRigidbody.linearDamping = _savedLinearDamping;
-                movingRigidbody.angularDamping = _savedAngularDamping;
-                // Don't restore isKinematic to avoid breaking if object is being destroyed
+                // Use HingeJoint for doors
+                _hinge = movingPart.GetComponent<HingeJoint>();
+                if (_hinge == null) _hinge = movingPart.gameObject.AddComponent<HingeJoint>();
+
+                _hinge.connectedBody = _parentRigidbody;
+                _hinge.anchor = Vector3.zero; // pivot at movingPart origin - designer should set movingPart pivot at hinge
+                _hinge.axis = GetHingeAxis();
+                _hinge.useLimits = true;
+                _hinge.useMotor = !requirePlayerPush;
+                _hinge.useSpring = !requirePlayerPush;
+
+                // Configure limits - will be updated in ApplyLockState
+                var limits = _hinge.limits;
+                limits.min = 0f;
+                limits.max = _isLocked ? 0f : _openAngle;
+                _hinge.limits = limits;
+
+                if (!requirePlayerPush)
+                {
+                    var spring = _hinge.spring;
+                    spring.spring = jointSpring;
+                    spring.damper = jointDamper;
+                    spring.targetPosition = _isOpen ? _openAngle : 0f;
+                    _hinge.spring = spring;
+
+                    var motor = _hinge.motor;
+                    motor.force = jointMotorForce;
+                    motor.targetVelocity = 0f;
+                    motor.freeSpin = false;
+                    _hinge.motor = motor;
+                }
+            }
+            else // Slide
+            {
+                // Use ConfigurableJoint for drawers
+                _configurable = movingPart.GetComponent<ConfigurableJoint>();
+                if (_configurable == null) _configurable = movingPart.gameObject.AddComponent<ConfigurableJoint>();
+
+                _configurable.connectedBody = _parentRigidbody;
+                _configurable.anchor = Vector3.zero;
+                _configurable.axis = _slideAxis;
+                _configurable.secondaryAxis = Vector3.up; // arbitrary perpendicular
+
+                // Lock angular motion
+                _configurable.angularXMotion = ConfigurableJointMotion.Locked;
+                _configurable.angularYMotion = ConfigurableJointMotion.Locked;
+                _configurable.angularZMotion = ConfigurableJointMotion.Locked;
+
+                // Linear motion: lock 2 axes, free 1 along slide axis
+                // We need to determine which axis is slide - use XMotion for primary axis
+                // For simplicity, we set XMotion limited, Y/Z locked, and set axis to slide direction
+                _configurable.xMotion = ConfigurableJointMotion.Limited;
+                _configurable.yMotion = ConfigurableJointMotion.Locked;
+                _configurable.zMotion = ConfigurableJointMotion.Locked;
+
+                // If slide axis is not X, we need to rotate joint frame - easier: keep XMotion as slide and set axis accordingly
+                // ConfigurableJoint axis defines XMotion direction, so we already set axis = slideAxis
+
+                var limit = _configurable.linearLimit;
+                limit.limit = _isLocked ? 0f : _slideDistance;
+                _configurable.linearLimit = limit;
+
+                // Spring to drive to target
+                if (!requirePlayerPush)
+                {
+                    var xDrive = _configurable.xDrive;
+                    xDrive.positionSpring = jointSpring;
+                    xDrive.positionDamper = jointDamper;
+                    xDrive.maximumForce = jointMotorForce;
+                    _configurable.xDrive = xDrive;
+                    _configurable.targetPosition = _isOpen ? new Vector3(_slideDistance, 0, 0) : Vector3.zero;
+                }
+            }
+        }
+
+        private Vector3 GetHingeAxis()
+        {
+            // Determine hinge axis from openRotation - dominant component
+            Vector3 abs = new Vector3(Mathf.Abs(openRotation.x), Mathf.Abs(openRotation.y), Mathf.Abs(openRotation.z));
+            if (abs.x >= abs.y && abs.x >= abs.z) return new Vector3(Mathf.Sign(openRotation.x), 0, 0);
+            if (abs.y >= abs.x && abs.y >= abs.z) return new Vector3(0, Mathf.Sign(openRotation.y), 0);
+            return new Vector3(0, 0, Mathf.Sign(openRotation.z));
+        }
+
+        private void ApplyLockState()
+        {
+            if (movingRigidbody == null) return;
+
+            if (_isLocked && disableRigidbodyWhenLocked)
+            {
+                // When locked: Rigidbody disabled (isKinematic true) so it can't be moved, even by PlayerCarry
+                movingRigidbody.isKinematic = true;
+                movingRigidbody.linearVelocity = Vector3.zero;
+                movingRigidbody.angularVelocity = Vector3.zero;
+
+                // Lock joint at 0
+                if (_hinge != null)
+                {
+                    var limits = _hinge.limits;
+                    limits.min = 0f;
+                    limits.max = 0f;
+                    _hinge.limits = limits;
+                    if (!requirePlayerPush)
+                    {
+                        var spring = _hinge.spring;
+                        spring.targetPosition = 0f;
+                        _hinge.spring = spring;
+                    }
+                }
+                if (_configurable != null)
+                {
+                    var limit = _configurable.linearLimit;
+                    limit.limit = 0f;
+                    _configurable.linearLimit = limit;
+                    if (!requirePlayerPush)
+                        _configurable.targetPosition = Vector3.zero;
+                }
+            }
+            else
+            {
+                // When unlocked: Rigidbody enabled (isKinematic false) so physics and PlayerCarry can move it
+                movingRigidbody.isKinematic = false;
+                movingRigidbody.WakeUp();
+
+                // Allow movement up to open range
+                if (_hinge != null)
+                {
+                    var limits = _hinge.limits;
+                    limits.min = 0f;
+                    limits.max = _openAngle;
+                    _hinge.limits = limits;
+                }
+                if (_configurable != null)
+                {
+                    var limit = _configurable.linearLimit;
+                    limit.limit = _slideDistance;
+                    _configurable.linearLimit = limit;
+                }
+
+                // Update motor target to current open state
+                UpdateJointTarget();
+            }
+        }
+
+        private void UpdateJointTarget()
+        {
+            if (movingRigidbody == null || _isLocked) return;
+            if (requirePlayerPush) return; // player must push, no motor
+
+            if (_hinge != null)
+            {
+                var spring = _hinge.spring;
+                spring.targetPosition = _isOpen ? _openAngle : 0f;
+                _hinge.spring = spring;
+            }
+            if (_configurable != null)
+            {
+                _configurable.targetPosition = _isOpen ? new Vector3(_isOpen ? _slideDistance : 0f, 0, 0) : Vector3.zero;
             }
         }
 
         private void Update()
         {
-            // Non-physics animation in Update (old path)
-            if (!usePhysics || movingRigidbody == null || movingRigidbody.isKinematic)
+            // If not using joint or no Rigidbody, fallback to kinematic lerp (old, can penetrate but kept for compatibility)
+            if (!useJoint || movingRigidbody == null)
                 AnimateMovingPartKinematic();
 
             var isTargeted = IsTargetedByReticle();
             SetPromptVisible(isTargeted);
-
             if (!isTargeted) return;
 
             UpdatePromptText();
@@ -183,14 +332,8 @@ namespace GameAssets.Scripts.Environment
             }
         }
 
-        private void FixedUpdate()
-        {
-            if (usePhysics && movingRigidbody != null && !movingRigidbody.isKinematic)
-                AnimateMovingPartPhysics();
-        }
-
         // ─────────────────────────────────────────────
-        //  Public API
+        // Public API
         // ─────────────────────────────────────────────
 
         public void Interact()
@@ -200,6 +343,9 @@ namespace GameAssets.Scripts.Environment
                 TryUnlockWithKey();
                 return;
             }
+
+            // If requirePlayerPush, Interact just toggles intent - player must physically push
+            // If not, motor will drive to open/closed
             SetOpen(!_isOpen);
         }
 
@@ -212,12 +358,14 @@ namespace GameAssets.Scripts.Environment
             _isLocked = false;
             PlaySound(unlockSound);
             OnUnlocked?.Invoke();
+            ApplyLockState();
         }
 
         public void Lock()
         {
             _isLocked = true;
             if (_isOpen) SetOpen(false);
+            ApplyLockState();
         }
 
         public bool TryUnlockWithKey()
@@ -244,8 +392,7 @@ namespace GameAssets.Scripts.Environment
         public bool IsMatchingKey(GameObject candidate)
         {
             if (candidate == null) return false;
-            if (requiredKey != null && (candidate == requiredKey || candidate.transform.IsChildOf(requiredKey.transform)))
-                return true;
+            if (requiredKey != null && (candidate == requiredKey || candidate.transform.IsChildOf(requiredKey.transform))) return true;
             if (string.IsNullOrWhiteSpace(requiredKeyId)) return false;
 
             var furnitureKey = candidate.GetComponentInChildren<FurnitureKey>(true);
@@ -261,33 +408,22 @@ namespace GameAssets.Scripts.Environment
             return placeable != null && FurnitureKey.IdsMatch(placeable.ItemId, requiredKeyId);
         }
 
-        // ─────────────────────────────────────────────
-        //  Lock internals
-        // ─────────────────────────────────────────────
-
         private bool TryConsumeMatchingKey()
         {
             var carriedKey = FindCarriedKey();
-            if (carriedKey != null)
-            {
-                UnlockWithReferenceKey(carriedKey);
-                return true;
-            }
-            if (!string.IsNullOrWhiteSpace(requiredKeyId) && KeyItem.TryUseKey(requiredKeyId, keyAccess, consumeKey, out _))
-                return true;
+            if (carriedKey != null) { UnlockWithReferenceKey(carriedKey); return true; }
+            if (!string.IsNullOrWhiteSpace(requiredKeyId) && KeyItem.TryUseKey(requiredKeyId, keyAccess, consumeKey, out _)) return true;
             return false;
         }
 
-        private void UnlockWithReferenceKey(GameObject key)
-        {
-            if (consumeKey) ConsumeKey(key);
-        }
+        private void UnlockWithReferenceKey(GameObject key) { if (consumeKey) ConsumeKey(key); }
 
         private void UnlockNow()
         {
             _isLocked = false;
             PlaySound(unlockSound);
             OnUnlocked?.Invoke();
+            ApplyLockState();
             if (openWhenUnlocked && !_isOpen) SetOpen(true);
         }
 
@@ -296,12 +432,8 @@ namespace GameAssets.Scripts.Environment
             if (open && _isLocked) return;
             if (_isOpen == open) return;
             _isOpen = open;
-            if (open) OnOpened?.Invoke();
-            else
-            {
-                OnClosed?.Invoke();
-                if (relockOnClose) _isLocked = true;
-            }
+            if (open) OnOpened?.Invoke(); else { OnClosed?.Invoke(); if (relockOnClose) { _isLocked = true; ApplyLockState(); } }
+            UpdateJointTarget();
         }
 
         private GameObject FindCarriedKey()
@@ -314,34 +446,28 @@ namespace GameAssets.Scripts.Environment
         {
             var carry = PlayerCarry.Instance;
             if (carry != null && carry.HeldItem != null) return carry.HeldItem.gameObject;
-            if (playerCameraController != null && playerCameraController.CarriedInteractable != null)
-                return playerCameraController.CarriedInteractable.gameObject;
+            if (playerCameraController != null && playerCameraController.CarriedInteractable != null) return playerCameraController.CarriedInteractable.gameObject;
             return null;
         }
 
         private void ConsumeKey(GameObject key)
         {
             var carry = PlayerCarry.Instance;
-            if (carry != null && carry.HeldItem != null && carry.HeldItem.gameObject == key)
-                carry.TakeHeldItem();
-            if (playerCameraController != null && playerCameraController.CarriedInteractable != null && playerCameraController.CarriedInteractable.gameObject == key)
-                playerCameraController.ReleaseCarriedObject();
+            if (carry != null && carry.HeldItem != null && carry.HeldItem.gameObject == key) carry.TakeHeldItem();
+            if (playerCameraController != null && playerCameraController.CarriedInteractable != null && playerCameraController.CarriedInteractable.gameObject == key) playerCameraController.ReleaseCarriedObject();
             key.SetActive(false);
         }
 
         // ─────────────────────────────────────────────
-        //  Targeting / animation / prompt
+        // Targeting / prompt / fallback animation
         // ─────────────────────────────────────────────
 
         private bool IsTargetedByReticle()
         {
-            if (playerCameraController == null)
-                playerCameraController = FindFirstObjectByType<FPPCameraController>();
+            if (playerCameraController == null) playerCameraController = FindFirstObjectByType<FPPCameraController>();
             if (playerCameraController == null) return false;
-
             var hitCount = Physics.RaycastNonAlloc(playerCameraController.ReticleRay, _reticleHits, interactionDistance, interactionLayers, QueryTriggerInteraction.Ignore);
             if (hitCount == 0) return false;
-
             var carried = GetCarriedObject();
             var nearest = -1;
             for (var i = 0; i < hitCount; i++)
@@ -357,118 +483,19 @@ namespace GameAssets.Scripts.Environment
         {
             var lerpFactor = 1f - Mathf.Exp(-openSpeed * Time.deltaTime);
             if (openMode == OpenMode.Rotate)
-            {
                 movingPart.localRotation = Quaternion.Slerp(movingPart.localRotation, _isOpen ? _openRotation : _closedRotation, lerpFactor);
-            }
             else
-            {
                 movingPart.localPosition = Vector3.Lerp(movingPart.localPosition, _isOpen ? _openPosition : _closedPosition, lerpFactor);
-            }
         }
 
-        private void AnimateMovingPartPhysics()
-        {
-            if (movingRigidbody == null) return;
-
-            // Increase damping while moving to help stop
-            movingRigidbody.linearDamping = Mathf.Max(_savedLinearDamping, linearDamping);
-            movingRigidbody.angularDamping = Mathf.Max(_savedAngularDamping, angularDamping);
-
-            if (openMode == OpenMode.Slide)
-            {
-                // Target world position
-                Vector3 targetLocal = _isOpen ? _openPosition : _closedPosition;
-                Vector3 targetWorld;
-                if (movingPart.parent != null)
-                    targetWorld = movingPart.parent.TransformPoint(targetLocal);
-                else
-                    targetWorld = targetLocal;
-
-                Vector3 toTarget = targetWorld - movingRigidbody.position;
-                float dist = toTarget.magnitude;
-
-                if (dist < positionThreshold)
-                {
-                    // Close enough - stop
-                    movingRigidbody.linearVelocity = Vector3.Lerp(movingRigidbody.linearVelocity, Vector3.zero, 0.5f);
-                    return;
-                }
-
-                // Braking speed to avoid overshoot (similar to PlayerCarry)
-                float dt = Time.fixedDeltaTime;
-                float accelCap = maxAcceleration;
-                float maxSpeed = maxLinearSpeed;
-                float approachSpeed = Mathf.Min(BrakingSpeed(dist, accelCap, dt), maxSpeed);
-                Vector3 desiredVel = toTarget.normalized * approachSpeed;
-                Vector3 velError = desiredVel - movingRigidbody.linearVelocity;
-
-                // Force = mass * acceleration, capped
-                float mass = Mathf.Max(0.1f, movingRigidbody.mass);
-                Vector3 force = velError * (mass / dt);
-                float forceCap = Mathf.Min(maxForce, mass * maxAcceleration);
-                force = Vector3.ClampMagnitude(force, forceCap);
-
-                movingRigidbody.AddForce(force, ForceMode.Force);
-            }
-            else // Rotate
-            {
-                Quaternion targetLocal = _isOpen ? _openRotation : _closedRotation;
-                Quaternion targetWorld;
-                if (movingPart.parent != null)
-                    targetWorld = movingPart.parent.rotation * targetLocal;
-                else
-                    targetWorld = targetLocal;
-
-                Quaternion currentWorld = movingRigidbody.rotation;
-                Quaternion delta = targetWorld * Quaternion.Inverse(currentWorld);
-                delta.ToAngleAxis(out float angleDeg, out Vector3 axis);
-                if (angleDeg > 180f) angleDeg -= 360f;
-                float angleRad = angleDeg * Mathf.Deg2Rad;
-                axis.Normalize();
-
-                if (Mathf.Abs(angleDeg) < rotationThreshold)
-                {
-                    movingRigidbody.angularVelocity = Vector3.Lerp(movingRigidbody.angularVelocity, Vector3.zero, 0.5f);
-                    return;
-                }
-
-                float dt = Time.fixedDeltaTime;
-                float maxAngSpeedRad = maxAngularSpeed * Mathf.Deg2Rad;
-                float approachAngSpeed = Mathf.Min(BrakingSpeed(Mathf.Abs(angleRad), maxAngularAcceleration * Mathf.Deg2Rad, dt), maxAngSpeedRad);
-                Vector3 desiredAngVel = axis * (approachAngSpeed * Mathf.Sign(angleRad));
-                Vector3 angVelError = desiredAngVel - movingRigidbody.angularVelocity;
-
-                float mass = Mathf.Max(0.1f, movingRigidbody.mass);
-                // Approximate inertia - use mass * some factor, but we have inertiaTensor
-                Vector3 torque = Vector3.Scale(movingRigidbody.inertiaTensor, angVelError) / dt;
-                // Clamp torque
-                torque = Vector3.ClampMagnitude(torque, maxTorque);
-
-                movingRigidbody.AddTorque(torque, ForceMode.Force);
-            }
-        }
-
-        private static float BrakingSpeed(float distance, float decel, float dt)
-        {
-            // v = sqrt(2*a*d) - with small dt compensation to avoid jitter
-            if (distance <= 0f || decel <= 0f) return 0f;
-            float v = Mathf.Sqrt(2f * decel * distance);
-            // Don't go faster than can be stopped in next frame
-            return Mathf.Max(0f, v - decel * dt * 0.5f);
-        }
-
-        private void UpdatePromptText()
-        {
-            if (interactionPrompt != null) interactionPrompt.text = BuildPromptText();
-        }
+        private void UpdatePromptText() { if (interactionPrompt != null) interactionPrompt.text = BuildPromptText(); }
 
         private string BuildPromptText()
         {
             var keyName = interactKey.ToString().ToUpperInvariant();
             if (_isLocked)
             {
-                if (unlockWithKey && PlayerHasMatchingKey(out var keyDisplayName))
-                    return string.Format(unlockPromptText, keyName, keyDisplayName);
+                if (unlockWithKey && PlayerHasMatchingKey(out var keyDisplayName)) return string.Format(unlockPromptText, keyName, keyDisplayName);
                 return RequiresKey ? lockedPromptText : "Locked";
             }
             return string.Format(_isOpen ? closePromptText : openPromptText, keyName);
@@ -493,14 +520,8 @@ namespace GameAssets.Scripts.Environment
             return false;
         }
 
-        private void SetPromptVisible(bool visible)
-        {
-            if (interactionPrompt != null) interactionPrompt.gameObject.SetActive(visible);
-        }
+        private void SetPromptVisible(bool visible) { if (interactionPrompt != null) interactionPrompt.gameObject.SetActive(visible); }
 
-        private void PlaySound(AudioClip clip)
-        {
-            if (clip != null) AudioSource.PlayClipAtPoint(clip, movingPart != null ? movingPart.position : transform.position);
-        }
+        private void PlaySound(AudioClip clip) { if (clip != null) AudioSource.PlayClipAtPoint(clip, movingPart != null ? movingPart.position : transform.position); }
     }
 }
