@@ -291,18 +291,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 7076101939358636472}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -574,18 +569,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -713,18 +703,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -775,18 +760,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -1519,18 +1499,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 115, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -1685,18 +1660,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -2294,18 +2264,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: -1, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 1
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -2398,18 +2363,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 1
   requiredKey: {fileID: 609256651}
   requiredKeyId: 
@@ -2526,18 +2486,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -3445,18 +3400,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -5067,18 +5017,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: -45, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -5747,7 +5692,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
+  - {fileID: 2100000, guid: bfb52bca8545efc459a2b211f04fed5b, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -5975,18 +5920,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: -105, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -6094,18 +6034,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -10352,6 +10287,7 @@ GameObject:
   - component: {fileID: 7076101939358636469}
   - component: {fileID: 7076101939358636472}
   - component: {fileID: 7076101939358636473}
+  - component: {fileID: 7076101939358636475}
   m_Layer: 8
   m_Name: Cabin 3
   m_TagString: Untagged
@@ -10421,18 +10357,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: -100, z: 0}
   openOffset: {x: 0, y: 0, z: 0.4}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -11053,7 +10984,7 @@ Rigidbody:
   m_ImplicitCom: 1
   m_ImplicitTensor: 1
   m_UseGravity: 1
-  m_IsKinematic: 1
+  m_IsKinematic: 0
   m_Interpolate: 0
   m_Constraints: 0
   m_CollisionDetection: 1
@@ -11078,6 +11009,22 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 0.58959323, y: 0.13511062, z: 1.045202}
   m_Center: {x: 0.27431336, y: -0.08409715, z: -0.000000059604645}
+--- !u!114 &7076101939358636475
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6394494673453604886}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e5c357f9f3ce4c58b91f24954388e2f9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Entities.Interactable
+  displayName: '-'
+  pickupSound: {fileID: 0}
+  dropSound: {fileID: 0}
+  throwSound: {fileID: 0}
 --- !u!1 &7151976852516595300
 GameObject:
   m_ObjectHideFlags: 0
@@ -12051,18 +11998,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
@@ -12407,18 +12349,13 @@ MonoBehaviour:
   openRotation: {x: 0, y: 90, z: 0}
   openOffset: {x: -0.4, y: 0, z: 0}
   openSpeed: 8
-  usePhysics: 1
+  useJoint: 1
   movingRigidbody: {fileID: 0}
-  maxForce: 400
-  maxTorque: 150
-  maxAcceleration: 40
-  maxAngularAcceleration: 360
-  linearDamping: 2
-  angularDamping: 5
-  positionThreshold: 0.005
-  rotationThreshold: 0.5
-  maxLinearSpeed: 2
-  maxAngularSpeed: 120
+  disableRigidbodyWhenLocked: 1
+  jointMotorForce: 500
+  jointSpring: 500
+  jointDamper: 50
+  requirePlayerPush: 0
   startsLocked: 0
   requiredKey: {fileID: 0}
   requiredKeyId: 
