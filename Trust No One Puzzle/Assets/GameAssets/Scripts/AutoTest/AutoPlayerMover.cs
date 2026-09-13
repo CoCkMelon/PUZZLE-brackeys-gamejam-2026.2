@@ -11,7 +11,7 @@ using GameAssets.Scripts.UI.Mobile;
 /// Fully automatic player for AutoTest scenes.
 /// Disables manual FPP controller, CharacterController, PlayerInteraction
 /// and drives player via NavMeshAgent, auto-picking, placing, opening, breaking.
-/// Attach to Player root. Requires no manual input.
+/// Fixed: handles missing NavMesh, unreadable meshes, fallback direct movement, safe tag handling.
 /// </summary>
 [RequireComponent(typeof(NavMeshAgent))]
 public class AutoPlayerMover : MonoBehaviour
@@ -39,6 +39,7 @@ public class AutoPlayerMover : MonoBehaviour
     [SerializeField] private float moveSpeed = 3.5f;
     [SerializeField] private float runSpeed = 5f;
     [SerializeField] private bool useRun = false;
+    [SerializeField] private bool fallbackDirectMove = true;
 
     [Header("Auto-Solve")]
     [SerializeField] private bool autoPickup = true;
@@ -52,6 +53,8 @@ public class AutoPlayerMover : MonoBehaviour
     private float _waitTimer;
     private float _actionTimer;
     private bool _isRunning;
+    private Vector3 _fallbackTarget;
+    private bool _hasFallbackTarget;
 
     // Manual controllers to disable
     private CharacterController _charController;
@@ -70,12 +73,15 @@ public class AutoPlayerMover : MonoBehaviour
 
         DisableManualControllers();
 
-        _agent.speed = useRun ? runSpeed : moveSpeed;
-        _agent.angularSpeed = 360f;
-        _agent.acceleration = 12f;
-        _agent.stoppingDistance = waypointReachDistance;
-        _agent.autoBraking = true;
-        _agent.updateRotation = true;
+        if (_agent != null)
+        {
+            _agent.speed = useRun ? runSpeed : moveSpeed;
+            _agent.angularSpeed = 360f;
+            _agent.acceleration = 12f;
+            _agent.stoppingDistance = waypointReachDistance;
+            _agent.autoBraking = true;
+            _agent.updateRotation = true;
+        }
     }
 
     private void OnEnable()
@@ -86,7 +92,7 @@ public class AutoPlayerMover : MonoBehaviour
 
     private void Start()
     {
-        if (NavMesh.SamplePosition(transform.position, out var hit, 5f, NavMesh.AllAreas))
+        if (_agent != null && NavMesh.SamplePosition(transform.position, out var hit, 5f, NavMesh.AllAreas))
         {
             _agent.Warp(hit.position);
         }
@@ -119,6 +125,21 @@ public class AutoPlayerMover : MonoBehaviour
         var baker = FindFirstObjectByType<NavMeshAutoBaker>();
         baker?.TryBake();
 
+        Debug.Log($"[AutoPlayerMover] Starting auto in mode {mode}, NavMesh vertices={NavMesh.CalculateTriangulation().vertices.Length}");
+
+        if (_agent != null && !_agent.isOnNavMesh)
+        {
+            if (NavMesh.SamplePosition(transform.position, out var hit2, 5f, NavMesh.AllAreas))
+            {
+                _agent.Warp(hit2.position);
+                Debug.Log($"[AutoPlayerMover] Warped agent to NavMesh at {hit2.position}");
+            }
+            else if (fallbackDirectMove)
+            {
+                Debug.LogWarning("[AutoPlayerMover] Agent not on NavMesh, will use direct movement fallback");
+            }
+        }
+
         if (mode == TestMode.ManualWaypoints && waypoints != null && waypoints.Length > 0 && waypoints[0] != null)
             SetDestination(waypoints[0].position);
         else
@@ -130,7 +151,8 @@ public class AutoPlayerMover : MonoBehaviour
     public void StopAuto()
     {
         _isRunning = false;
-        if (_agent.isOnNavMesh) _agent.ResetPath();
+        if (_agent != null && _agent.isOnNavMesh) _agent.ResetPath();
+        _hasFallbackTarget = false;
     }
 
     private void Update()
@@ -139,14 +161,35 @@ public class AutoPlayerMover : MonoBehaviour
         if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
         if (_actionTimer > 0) { _actionTimer -= Time.deltaTime; }
 
-        if (!_agent.isOnNavMesh)
+        if (_agent != null && !_agent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out var hit, 10f, NavMesh.AllAreas))
                 _agent.Warp(hit.position);
-            return;
+            else if (fallbackDirectMove && _hasFallbackTarget)
+            {
+                UpdateFallbackMove();
+                return;
+            }
+            else return;
         }
 
-        if (!_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.3f)
+        // Fallback direct movement if NavMeshAgent fails
+        if (fallbackDirectMove && _hasFallbackTarget && _agent != null && (!_agent.isOnNavMesh || !_agent.hasPath))
+        {
+            UpdateFallbackMove();
+        }
+
+        bool reached = false;
+        if (_agent != null && _agent.isOnNavMesh)
+        {
+            reached = !_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.3f;
+        }
+        else if (_hasFallbackTarget)
+        {
+            reached = Vector3.Distance(transform.position, _fallbackTarget) <= waypointReachDistance + 0.5f;
+        }
+
+        if (reached)
         {
             if (_actionTimer <= 0f)
             {
@@ -155,6 +198,27 @@ public class AutoPlayerMover : MonoBehaviour
             }
             _waitTimer = waitAtWaypoint;
             SetNextPuzzleDestination();
+        }
+    }
+
+    void UpdateFallbackMove()
+    {
+        if (!_hasFallbackTarget) return;
+        Vector3 dir = _fallbackTarget - transform.position;
+        dir.y = 0;
+        float dist = dir.magnitude;
+        if (dist <= waypointReachDistance) return;
+        dir.Normalize();
+        float speed = useRun ? runSpeed : moveSpeed;
+        Vector3 move = dir * speed * Time.deltaTime;
+
+        // CharacterController is disabled, so use transform
+        transform.position += move;
+
+        if (dir != Vector3.zero)
+        {
+            Quaternion targetRot = Quaternion.LookRotation(dir);
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, Time.deltaTime * 5f);
         }
     }
 
@@ -167,13 +231,45 @@ public class AutoPlayerMover : MonoBehaviour
             _currentIndex = (_currentIndex + 1) % waypoints.Length;
             if (waypoints[_currentIndex] != null) SetDestination(waypoints[_currentIndex].position);
         }
+        else
+        {
+            TryFindDynamicTarget();
+        }
     }
 
     private void SetDestination(Vector3 pos)
     {
-        if (!_agent.isOnNavMesh) return;
-        if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas)) pos = hit.position;
-        _agent.SetDestination(pos);
+        _fallbackTarget = pos;
+        _hasFallbackTarget = true;
+
+        if (_agent != null && _agent.isOnNavMesh)
+        {
+            if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas))
+            {
+                pos = hit.position;
+                _agent.SetDestination(pos);
+                return;
+            }
+            else
+            {
+                Debug.LogWarning($"[AutoPlayerMover] No NavMesh near target {pos}, using direct move");
+            }
+        }
+    }
+
+    void TryFindDynamicTarget()
+    {
+        string[] searchOrder = { "Table", "Cabin 8", "Cabin 1", "Drawer 1", "Drawer 2", "tool Box", "Tool Box", "Hammer", "chair 2" };
+        foreach (var name in searchOrder)
+        {
+            var go = GameObject.Find(name);
+            if (go != null)
+            {
+                SetDestination(go.transform.position);
+                Debug.Log($"[AutoPlayerMover] Dynamic target found: {name}");
+                return;
+            }
+        }
     }
 
     private Transform FindNextPuzzleTarget()

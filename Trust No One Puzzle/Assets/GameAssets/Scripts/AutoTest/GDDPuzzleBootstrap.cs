@@ -50,6 +50,7 @@ public class GDDPuzzleBootstrap : MonoBehaviour
     void SetupAll()
     {
         SetupPlayer();
+        SetupFurnitureRigidbodies();
         SetupWrongHintSystem();
         SetupMirror();
         SetupRoom1();
@@ -57,6 +58,46 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         SetupEnding();
         SetupPhoneStory();
         Debug.Log("[GDDPuzzleBootstrap] Setup complete");
+    }
+
+    void SetupFurnitureRigidbodies()
+    {
+        // Fix: OpenableFurniture useJoint requires Rigidbody, add if missing to silence warnings
+        var allFurniture = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
+        foreach (var f in allFurniture)
+        {
+            if (f == null) continue;
+            var movingPartField = typeof(OpenableFurniture).GetField("movingPart", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Transform movingPart = null;
+            if (movingPartField != null) movingPart = movingPartField.GetValue(f) as Transform;
+            if (movingPart == null) movingPart = f.transform;
+
+            var rb = movingPart.GetComponent<Rigidbody>();
+            if (rb == null)
+            {
+                // Check if furniture itself has rb
+                rb = f.GetComponent<Rigidbody>();
+                if (rb == null)
+                {
+                    rb = movingPart.gameObject.AddComponent<Rigidbody>();
+                    rb.mass = 10f;
+                    rb.linearDamping = 1f;
+                    rb.angularDamping = 5f;
+                    rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+                    rb.interpolation = RigidbodyInterpolation.Interpolate;
+                    rb.useGravity = false;
+                    rb.isKinematic = true; // will be managed by OpenableFurniture lock state
+                    Debug.Log($"[GDD] Added Rigidbody to {f.name} movingPart {movingPart.name} to fix joint warning");
+                }
+            }
+
+            // Ensure movingRigidbody field points to this rb
+            var movingRbField = typeof(OpenableFurniture).GetField("movingRigidbody", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (movingRbField != null && movingRbField.GetValue(f) == null)
+            {
+                movingRbField.SetValue(f, rb);
+            }
+        }
     }
 
     void SetupPlayer()

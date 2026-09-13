@@ -5,7 +5,7 @@ using System.Collections.Generic;
 /// <summary>
 /// Runtime NavMesh baker for auto-test scenes.
 /// Tries NavMeshSurface from AI Navigation package, falls back to NavMeshBuilder API.
-/// Attach to empty GameObject in AutoTest scenes.
+/// Now filters out non-readable meshes to avoid "does not allow read access" warnings.
 /// </summary>
 public class NavMeshAutoBaker : MonoBehaviour
 {
@@ -58,51 +58,74 @@ public class NavMeshAutoBaker : MonoBehaviour
         }
 
         // Runtime build via NavMeshBuilder
-        Debug.Log("[NavMeshAutoBaker] No NavMesh, building via NavMeshBuilder API...");
+        Debug.Log("[NavMeshAutoBaker] No NavMesh, building via NavMeshBuilder API (readable meshes only)...");
         BuildNavMeshRuntime();
     }
 
     private void BuildNavMeshRuntime()
     {
-        // Collect all MeshRenderers and Terrains in bakeLayers
         var sources = new List<NavMeshBuildSource>();
-        var markups = new List<NavMeshBuildMarkup>();
+        int skippedUnreadable = 0;
+        int addedMeshes = 0;
+        int addedColliders = 0;
 
-        // Add all active renderers
+        // Add only readable MeshFilters
         var renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
         foreach (var r in renderers)
         {
             if (r == null || !r.gameObject.activeInHierarchy) continue;
             if ((bakeLayers.value & (1 << r.gameObject.layer)) == 0) continue;
-            // Skip player and small dynamic objects
             if (r.GetComponentInParent<CharacterController>() != null) continue;
-            if (r.transform.root.CompareTag("Player")) continue;
+            try { if (r.transform.root.CompareTag("Player")) continue; } catch { /* tag not defined */ }
 
             var mf = r.GetComponent<MeshFilter>();
             if (mf != null && mf.sharedMesh != null)
             {
+                // CRITICAL FIX: Skip non-readable meshes to avoid warning
+                if (!mf.sharedMesh.isReadable)
+                {
+                    skippedUnreadable++;
+                    continue;
+                }
                 var src = new NavMeshBuildSource();
                 src.shape = NavMeshBuildSourceShape.Mesh;
                 src.sourceObject = mf.sharedMesh;
                 src.transform = mf.transform.localToWorldMatrix;
                 src.area = 0;
                 sources.Add(src);
+                addedMeshes++;
             }
         }
 
-        // Add colliders as box sources for floors/walls
+        // Add colliders as box sources for floors/walls - more reliable than meshes
         var colliders = FindObjectsByType<Collider>(FindObjectsSortMode.None);
         foreach (var c in colliders)
         {
             if (c == null || !c.gameObject.activeInHierarchy) continue;
             if ((bakeLayers.value & (1 << c.gameObject.layer)) == 0) continue;
-            if (c is MeshCollider) continue; // already handled via mesh
+            if (c is MeshCollider) continue; // skip mesh colliders, often non-readable too
             if (c.GetComponentInParent<CharacterController>() != null) continue;
+            if (c.isTrigger) continue; // don't bake triggers
 
             var src = new NavMeshBuildSource();
             src.shape = NavMeshBuildSourceShape.Box;
             src.size = c.bounds.size;
             src.transform = Matrix4x4.TRS(c.bounds.center, c.transform.rotation, Vector3.one);
+            src.area = 0;
+            sources.Add(src);
+            addedColliders++;
+        }
+
+        Debug.Log($"[NavMeshAutoBaker] Sources: {addedMeshes} readable meshes, {addedColliders} colliders, skipped {skippedUnreadable} unreadable");
+
+        if (sources.Count == 0)
+        {
+            Debug.LogWarning("[NavMeshAutoBaker] No valid sources found, creating simple plane NavMesh");
+            // Create a simple walkable plane as fallback
+            var src = new NavMeshBuildSource();
+            src.shape = NavMeshBuildSourceShape.Box;
+            src.size = new Vector3(100, 0.1f, 100);
+            src.transform = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one);
             src.area = 0;
             sources.Add(src);
         }
@@ -117,7 +140,6 @@ public class NavMeshAutoBaker : MonoBehaviour
         }
 
         var bounds = new Bounds(Vector3.zero, new Vector3(100, 20, 100));
-        // Calculate bounds from sources
         if (sources.Count > 0)
         {
             bounds = new Bounds(sources[0].transform.GetColumn(3), Vector3.zero);
@@ -130,7 +152,7 @@ public class NavMeshAutoBaker : MonoBehaviour
         if (_navMeshData != null)
         {
             _navMeshInstance = NavMesh.AddNavMeshData(_navMeshData);
-            Debug.Log($"[NavMeshAutoBaker] Runtime NavMesh built: {sources.Count} sources, bounds {bounds.size}, valid={_navMeshInstance.valid}");
+            Debug.Log($"[NavMeshAutoBaker] Runtime NavMesh built: {sources.Count} sources, bounds {bounds.size}, valid={_navMeshInstance.valid}, triangulation vertices={NavMesh.CalculateTriangulation().vertices.Length}");
         }
         else
         {

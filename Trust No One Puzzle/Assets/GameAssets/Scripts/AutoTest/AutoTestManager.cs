@@ -8,6 +8,7 @@ using GameAssets.Scripts.Environment;
 /// <summary>
 /// Manages automated testing of the full game loop using NavMesh.
 /// Now includes full autonomous solver that can finish game.
+/// Fixed: safe tag handling, furniture rigidbody fix, NavMesh readable filter.
 /// </summary>
 public class AutoTestManager : MonoBehaviour
 {
@@ -38,7 +39,7 @@ public class AutoTestManager : MonoBehaviour
     {
         Log("AutoTestManager: Starting automated tests - Full Game Walkthrough");
 
-        // Ensure NavMesh
+        // Ensure NavMesh - now filters unreadable meshes
         var baker = FindFirstObjectByType<NavMeshAutoBaker>();
         if (baker == null)
         {
@@ -48,14 +49,18 @@ public class AutoTestManager : MonoBehaviour
         }
         baker.TryBake();
 
+        // Fix all furniture rigidbodies to silence warnings
+        FixAllFurnitureRigidbodies();
+
         if (useNavMeshForPlayer)
         {
-            var player = playerFPP != null ? playerFPP : (GameObject.FindWithTag("Player") ?? FindFirstObjectByType<CharacterController>()?.gameObject);
+            var player = SafeFindPlayer();
             if (player != null)
             {
                 var autoMover = player.GetComponent<AutoPlayerMover>();
                 if (autoMover == null) autoMover = player.AddComponent<AutoPlayerMover>();
-                autoMover.StartAuto();
+                // Delay start to allow NavMesh to bake
+                Invoke(nameof(DelayedStartMover), 1f);
                 Log($"Added AutoPlayerMover to {player.name} - will tour mirrorKey->cabinet->table->drawer->toolbox->sofa->window");
             }
             else LogWarning("Player not found for auto-movement");
@@ -63,13 +68,14 @@ public class AutoTestManager : MonoBehaviour
 
         if (autoMoveStranger)
         {
-            var stranger = strangerNPC != null ? strangerNPC : (GameObject.Find("Stranger") ?? GameObject.FindWithTag("Stranger"));
+            var stranger = SafeFindStranger();
             if (stranger != null)
             {
                 var strangerMover = stranger.GetComponent<AutoStrangerMover>();
                 if (strangerMover == null) strangerMover = stranger.AddComponent<AutoStrangerMover>();
                 Log($"Added AutoStrangerMover to {stranger.name}");
             }
+            else Log("Stranger not found - optional for Room2, continuing");
         }
 
         if (autoSolvePuzzles)
@@ -94,12 +100,76 @@ public class AutoTestManager : MonoBehaviour
         }
     }
 
+    void DelayedStartMover()
+    {
+        var player = SafeFindPlayer();
+        if (player == null) return;
+        var mover = player.GetComponent<AutoPlayerMover>();
+        if (mover != null) mover.StartAuto();
+    }
+
+    void FixAllFurnitureRigidbodies()
+    {
+        var allFurniture = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
+        int fixedCount = 0;
+        foreach (var f in allFurniture)
+        {
+            if (f == null) continue;
+            var movingPartField = typeof(OpenableFurniture).GetField("movingPart", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Transform movingPart = null;
+            if (movingPartField != null) movingPart = movingPartField.GetValue(f) as Transform;
+            if (movingPart == null) movingPart = f.transform;
+
+            if (movingPart.GetComponent<Rigidbody>() == null && f.GetComponent<Rigidbody>() == null)
+            {
+                var rb = movingPart.gameObject.AddComponent<Rigidbody>();
+                rb.mass = 10f;
+                rb.linearDamping = 1f;
+                rb.angularDamping = 5f;
+                rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+                rb.interpolation = RigidbodyInterpolation.Interpolate;
+                rb.useGravity = false;
+                rb.isKinematic = true;
+                fixedCount++;
+            }
+        }
+        if (fixedCount > 0) Log($"Fixed {fixedCount} furniture Rigidbodies to silence joint warnings");
+    }
+
+    GameObject SafeFindPlayer()
+    {
+        if (playerFPP != null) return playerFPP;
+        // Try tag safely
+        try { var go = GameObject.FindWithTag("Player"); if (go != null) return go; } catch { }
+        // Fallback to CharacterController
+        var cc = FindFirstObjectByType<CharacterController>();
+        if (cc != null) return cc.gameObject;
+        // Fallback to name
+        var byName = GameObject.Find("Player FPP") ?? GameObject.Find("Player") ?? GameObject.Find("Players");
+        if (byName != null) return byName;
+        // Any with PlayerCarry
+        var carry = FindFirstObjectByType<PlayerCarry>();
+        if (carry != null) return carry.gameObject;
+        return null;
+    }
+
+    GameObject SafeFindStranger()
+    {
+        if (strangerNPC != null) return strangerNPC;
+        // Try tag safely - tag may not be defined
+        try { var go = GameObject.FindWithTag("Stranger"); if (go != null) return go; } catch { /* tag not defined */ }
+        var byName = GameObject.Find("Stranger") ?? GameObject.Find("stranger") ?? GameObject.Find("NPC");
+        if (byName != null) return byName;
+        // Find any with AutoStrangerMover or stranger-like
+        var all = FindObjectsByType<Transform>(FindObjectsSortMode.None);
+        foreach (var t in all) if (t.name.ToLower().Contains("stranger")) return t.gameObject;
+        return null;
+    }
+
     private void AutoSolveStep()
     {
-        // Legacy step - now delegates to actual solving
         if (skipWrongHints) Log("Auto-solve: Following mirror truth, skipping wrong hints");
 
-        // Ensure keys are collected
         if (KeyRing.Count == 0)
         {
             Log("No keys yet, searching for cabinet_key under table per mirror truth");
@@ -110,9 +180,8 @@ public class AutoTestManager : MonoBehaviour
         foreach (var slot in slots)
         {
             if (slot.IsCorrectlyFilled) continue;
-            Log($"Slot {slot.SlotId} needs {slot.RequiredItemId} - attempting to auto-place correct item");
+            Log($"Slot {slot.SlotId} needs {slot.RequiredItemId} - auto-place");
 
-            // Find correct item
             var items = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
             foreach (var item in items)
             {
@@ -127,11 +196,9 @@ public class AutoTestManager : MonoBehaviour
             }
         }
 
-        // Check drawer unlock triggers
         var triggers = FindObjectsByType<DrawerUnlockTrigger>(FindObjectsSortMode.None);
         foreach (var t in triggers) t.Evaluate();
 
-        // Check if we should progress to next room
         var drawerUnlocked = false;
         foreach (var t in triggers) if (t.IsUnlocked && t.DrawerId == "room1_drawer") drawerUnlocked = true;
         if (drawerUnlocked && !KeyRing.Has("room2_key"))
@@ -140,7 +207,6 @@ public class AutoTestManager : MonoBehaviour
             KeyRing.Add("room2_key");
         }
 
-        // Room2 logic
         if (KeyRing.Has("room2_key") && !KeyRing.Has("toolbox_key"))
         {
             Log("Searching for toolbox_key in drawer");
@@ -160,7 +226,6 @@ public class AutoTestManager : MonoBehaviour
             }
         }
 
-        // Hammer and window
         if (KeyRing.Has("toolbox_key") && !KeyRing.Has("hammer"))
         {
             Log("Searching for hammer behind sofa");
@@ -172,7 +237,7 @@ public class AutoTestManager : MonoBehaviour
             var glass = FindFirstObjectByType<Glass>();
             if (glass != null)
             {
-                Log("Hammer has been found, breaking window to escape - ending");
+                Log("Hammer found, breaking window to escape - ending");
                 glass.BreakFromHammer();
                 CancelInvoke(nameof(AutoSolveStep));
                 Log("Game Completed via AutoTestManager!");
@@ -188,9 +253,10 @@ public class AutoTestManager : MonoBehaviour
     private void OnGUI()
     {
         if (!showDebugLogs) return;
-        GUILayout.BeginArea(new Rect(10, 10, 300, 250));
+        GUILayout.BeginArea(new Rect(10, 10, 320, 280));
         GUILayout.Label($"AutoTest - {SceneManager.GetActiveScene().name}");
-        GUILayout.Label($"Keys: {string.Join(\", \", KeyRing.CollectedKeys)}");
+        GUILayout.Label($"Keys: {string.Join(", ", KeyRing.CollectedKeys)}");
+        GUILayout.Label($"NavMesh vertices: {NavMesh.CalculateTriangulation().vertices.Length}");
         if (GUILayout.Button("Start Auto Tests")) StartTests();
         if (GUILayout.Button("Restart Scene")) RestartTest();
         if (GUILayout.Button("Stop Auto"))
