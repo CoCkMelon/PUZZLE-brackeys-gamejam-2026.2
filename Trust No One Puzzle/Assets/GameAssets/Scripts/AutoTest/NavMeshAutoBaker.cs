@@ -2,12 +2,6 @@ using UnityEngine;
 using UnityEngine.AI;
 using System.Collections.Generic;
 
-/// <summary>
-/// Runtime NavMesh baker for auto-test scenes.
-/// Tries NavMeshSurface from AI Navigation package, falls back to NavMeshBuilder API.
-/// Fixed: now uses ONLY colliders (Box) to avoid "Source mesh does not allow read access" warnings.
-/// Meshes like Cabin 1, Drawer, etc. are non-readable and cause spam - we skip them entirely.
-/// </summary>
 public class NavMeshAutoBaker : MonoBehaviour
 {
     [Header("Bake Settings")]
@@ -18,7 +12,6 @@ public class NavMeshAutoBaker : MonoBehaviour
     [SerializeField] private float agentHeight = 2f;
     [SerializeField] private float agentClimb = 0.4f;
     [SerializeField] private float agentSlope = 45f;
-    [SerializeField] private bool useOnlyColliders = true;
 
     private NavMeshData _navMeshData;
     private NavMeshDataInstance _navMeshInstance;
@@ -57,28 +50,53 @@ public class NavMeshAutoBaker : MonoBehaviour
             return;
         }
 
-        Debug.Log("[NavMeshAutoBaker] No NavMesh, building via collider-only method...");
+        Debug.Log("[NavMeshAutoBaker] No NavMesh, building via robust method...");
         BuildNavMeshRuntime();
     }
 
     private void BuildNavMeshRuntime()
     {
         var sources = new List<NavMeshBuildSource>();
-        int addedColliders = 0;
+        int added = 0;
 
-        // ONLY use colliders - never meshes, to avoid unreadable warnings
+        GameObject player = null;
+        try { player = GameObject.FindWithTag("Player"); } catch {}
+        if (player == null) player = GameObject.Find("Player FPP");
+        float groundY = player != null ? player.transform.position.y - 1f : 0f;
+
+        var groundSrc = new NavMeshBuildSource();
+        groundSrc.shape = NavMeshBuildSourceShape.Box;
+        groundSrc.size = new Vector3(200f, 0.2f, 200f);
+        groundSrc.transform = Matrix4x4.TRS(new Vector3(0, groundY, 0), Quaternion.identity, Vector3.one);
+        groundSrc.area = 0;
+        sources.Add(groundSrc);
+        added++;
+        Debug.Log($"[NavMeshAutoBaker] Added fallback ground plane at y={groundY} size 200x200");
+
         var colliders = FindObjectsByType<Collider>(FindObjectsSortMode.None);
         foreach (var c in colliders)
         {
             if (c == null || !c.gameObject.activeInHierarchy) continue;
             if ((bakeLayers.value & (1 << c.gameObject.layer)) == 0) continue;
-            if (c is MeshCollider) continue;
             if (c.GetComponentInParent<CharacterController>() != null) continue;
+            try { if (c.transform.root.CompareTag("Player")) continue; } catch {}
             if (c.isTrigger) continue;
-            // Skip small furniture colliders that shouldn't be walkable
-            if (c.bounds.size.y > 1f && c.bounds.size.x < 2f && c.bounds.size.z < 2f) continue; // tall narrow = furniture
 
-            try { if (c.transform.root.CompareTag("Player")) continue; } catch { }
+            bool isFlat = c.bounds.size.y < 0.6f && c.bounds.size.x > 0.5f && c.bounds.size.z > 0.5f;
+            bool isLargeFlat = c.bounds.size.x > 2f && c.bounds.size.z > 2f && c.bounds.size.y < 1f;
+            
+            if (!isFlat && !isLargeFlat)
+            {
+                if (c is BoxCollider box)
+                {
+                    if (box.size.y > 1f) continue;
+                }
+                else if (c is MeshCollider) continue;
+                else
+                {
+                    if (c.bounds.size.y > 1f && c.bounds.size.x < 3f) continue;
+                }
+            }
 
             var src = new NavMeshBuildSource();
             src.shape = NavMeshBuildSourceShape.Box;
@@ -86,21 +104,37 @@ public class NavMeshAutoBaker : MonoBehaviour
             src.transform = Matrix4x4.TRS(c.bounds.center, c.transform.rotation, Vector3.one);
             src.area = 0;
             sources.Add(src);
-            addedColliders++;
+            added++;
         }
 
-        Debug.Log($"[NavMeshAutoBaker] Sources: {addedColliders} colliders (mesh sources skipped to avoid read access errors)");
-
-        if (sources.Count == 0)
+        var meshFilters = FindObjectsByType<MeshFilter>(FindObjectsSortMode.None);
+        foreach (var mf in meshFilters)
         {
-            Debug.LogWarning("[NavMeshAutoBaker] No collider sources, creating simple plane");
-            var src = new NavMeshBuildSource();
-            src.shape = NavMeshBuildSourceShape.Box;
-            src.size = new Vector3(100, 0.1f, 100);
-            src.transform = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one);
-            src.area = 0;
-            sources.Add(src);
+            if (mf == null || !mf.gameObject.activeInHierarchy) continue;
+            if (mf.sharedMesh == null) continue;
+            if ((bakeLayers.value & (1 << mf.gameObject.layer)) == 0) continue;
+            if (mf.GetComponentInParent<CharacterController>() != null) continue;
+            try { if (mf.transform.root.CompareTag("Player")) continue; } catch {}
+
+            string nameLower = mf.name.ToLower();
+            bool likelyFloor = nameLower.Contains("floor") || nameLower.Contains("ground") || nameLower.Contains("plane") || mf.transform.localScale.y < 0.2f;
+            if (!likelyFloor) continue;
+
+            try
+            {
+                if (!mf.sharedMesh.isReadable) continue;
+                var src = new NavMeshBuildSource();
+                src.shape = NavMeshBuildSourceShape.Mesh;
+                src.sourceObject = mf.sharedMesh;
+                src.transform = mf.transform.localToWorldMatrix;
+                src.area = 0;
+                sources.Add(src);
+                added++;
+            }
+            catch { }
         }
+
+        Debug.Log($"[NavMeshAutoBaker] Sources: {added} (including fallback plane)");
 
         var settings = NavMesh.GetSettingsByID(0);
         if (settings.agentTypeID == 0)
@@ -111,20 +145,41 @@ public class NavMeshAutoBaker : MonoBehaviour
             settings.agentSlope = agentSlope;
         }
 
-        var bounds = new Bounds(Vector3.zero, new Vector3(100, 20, 100));
+        var bounds = new Bounds(Vector3.zero, new Vector3(200, 30, 200));
         if (sources.Count > 0)
         {
             bounds = new Bounds(sources[0].transform.GetColumn(3), Vector3.zero);
             foreach (var src in sources)
                 bounds.Encapsulate(src.transform.GetColumn(3));
-            bounds.Expand(new Vector3(10, 10, 10));
+            bounds.Expand(new Vector3(20, 20, 20));
         }
 
         _navMeshData = NavMeshBuilder.BuildNavMeshData(settings, sources, bounds, Vector3.zero, Quaternion.identity);
         if (_navMeshData != null)
         {
             _navMeshInstance = NavMesh.AddNavMeshData(_navMeshData);
-            Debug.Log($"[NavMeshAutoBaker] Runtime NavMesh built: {sources.Count} collider sources, bounds {bounds.size}, valid={_navMeshInstance.valid}, vertices={NavMesh.CalculateTriangulation().vertices.Length}");
+            int verts = NavMesh.CalculateTriangulation().vertices.Length;
+            Debug.Log($"[NavMeshAutoBaker] Runtime NavMesh built: {sources.Count} sources, bounds {bounds.size}, valid={_navMeshInstance.valid}, vertices={verts}");
+            if (verts == 0)
+            {
+                Debug.LogWarning("[NavMeshAutoBaker] Vertices 0 - trying even larger plane fallback");
+                sources.Clear();
+                var big = new NavMeshBuildSource();
+                big.shape = NavMeshBuildSourceShape.Box;
+                big.size = new Vector3(500, 0.1f, 500);
+                big.transform = Matrix4x4.TRS(new Vector3(0, groundY, 0), Quaternion.identity, Vector3.one);
+                big.area = 0;
+                sources.Add(big);
+                bounds = new Bounds(new Vector3(0, groundY, 0), new Vector3(500, 10, 500));
+                _navMeshData = NavMeshBuilder.BuildNavMeshData(settings, sources, bounds, Vector3.zero, Quaternion.identity);
+                if (_navMeshData != null)
+                {
+                    if (_navMeshInstance.valid) _navMeshInstance.Remove();
+                    _navMeshInstance = NavMesh.AddNavMeshData(_navMeshData);
+                    verts = NavMesh.CalculateTriangulation().vertices.Length;
+                    Debug.Log($"[NavMeshAutoBaker] Fallback large plane built: valid={_navMeshInstance.valid}, vertices={verts}");
+                }
+            }
         }
         else
         {
