@@ -376,24 +376,35 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         var table = GameObject.Find("Table");
         if (table != null)
         {
-            // Place key UNDER table per mirror truth, not in drawer (wrong hint)
-            cabinetKeyGo.transform.position = table.transform.position + new Vector3(0.2f, -0.45f, 0.3f);
+            // Place key UNDER table per mirror truth, with clearance to avoid floor/table penetration
+            Vector3 underTablePos = table.transform.position + new Vector3(0.2f, -0.25f, 0.3f); // -0.25 not -0.45 to avoid floor
+            // Ensure not penetrating floor - raycast down to find floor
+            if (Physics.Raycast(underTablePos + Vector3.up * 1f, Vector3.down, out var hit, 2f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                underTablePos.y = hit.point.y + 0.08f; // 8cm above floor
+            }
+            // Ensure free spot
+            if (!IsSpotFree(underTablePos, cabinetKeyGo.transform.localScale * 1.2f))
+            {
+                underTablePos = FindFreeSpotNear(table.transform.position + new Vector3(0.3f, 0.1f, 0.4f), 0.6f, cabinetKeyGo.transform.localScale);
+            }
+            cabinetKeyGo.transform.position = underTablePos;
             cabinetKeyGo.transform.rotation = Quaternion.identity;
-            // Make it visually distinct
+            var rbKey = cabinetKeyGo.GetComponent<Rigidbody>();
+            if (rbKey != null) { rbKey.isKinematic = false; rbKey.collisionDetectionMode = CollisionDetectionMode.Continuous; }
             var rend = cabinetKeyGo.GetComponent<Renderer>();
             if (rend != null) rend.material.color = Color.yellow;
-            // Add visual marker under table
             if (createVisualMarkers && GameObject.Find("KeyMarker_UnderTable") == null)
             {
                 var marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
                 marker.name = "KeyMarker_UnderTable";
-                marker.transform.position = cabinetKeyGo.transform.position + Vector3.down * 0.05f;
+                marker.transform.position = underTablePos + Vector3.down * 0.02f;
                 marker.transform.localScale = new Vector3(0.2f, 0.02f, 0.2f);
                 var mr = marker.GetComponent<Renderer>();
                 if (mr != null) mr.material.color = new Color(1, 1, 0, 0.5f);
                 Destroy(marker.GetComponent<Collider>());
             }
-            Log($"Cabinet key placed UNDER TABLE at {cabinetKeyGo.transform.position} per mirror truth (wrong hint says drawer)");
+            Log($"Cabinet key placed UNDER TABLE at {underTablePos} per mirror truth, non-penetrating, above floor");
         }
 
         // 2. Book, Candle, Vase - should be inside cabinet, revealed when opened
@@ -492,64 +503,80 @@ public class GDDPuzzleBootstrap : MonoBehaviour
 
     void HideObjectsInsideCabinet(GameObject cabinetGo)
     {
-        // Find book/candle/vase and move them inside cabinet - VISIBLE but inside for solvability
-        // Previously disabled renderer which made it look like nothing was carried
         string[] objNames = { "Puzzle book", "Puzzle book (1)", "Candle_low", "Candle_low (1)", "Vase", "Vase (1)" };
-        foreach (var n in objNames)
+        for (int idx = 0; idx < objNames.Length; idx++)
         {
+            var n = objNames[idx];
             var go = GameObject.Find(n);
             if (go == null) continue;
             var placeable = go.GetComponent<PlaceableItem>();
             if (placeable == null) placeable = go.AddComponent<PlaceableItem>();
-            // Keep inside cabinet but visible through open door - don't disable renderer, just position inside
+            // Use non-penetrating grid inside cabinet
+            Vector3 localPos = GetNonPenetratingPositionForCabinetContent(cabinetGo, idx, new Vector3(0.2f, 0.2f, 0.2f));
             if (go.transform.parent != cabinetGo.transform)
             {
                 go.transform.SetParent(cabinetGo.transform);
-                go.transform.localPosition = new Vector3(Random.Range(-0.25f, 0.25f), 0.2f + Random.Range(0, 0.3f), Random.Range(-0.15f, 0.15f));
-                go.transform.localRotation = Quaternion.identity;
             }
+            go.transform.localPosition = localPos;
+            go.transform.localRotation = Quaternion.identity;
             var rend = go.GetComponent<Renderer>();
-            if (rend != null) rend.enabled = true; // KEEP VISIBLE so player sees something was inside
-            // Ensure collider and rigidbody for pickup
+            if (rend != null) rend.enabled = true;
             if (go.GetComponent<Collider>() == null) go.AddComponent<BoxCollider>();
             var rb = go.GetComponent<Rigidbody>();
             if (rb == null) rb = go.AddComponent<Rigidbody>();
             rb.mass = 0.8f;
-            rb.isKinematic = true; // stay inside until cabinet opened
-            Log($"Cabinet content {go.name} placed inside {cabinetGo.name} at {go.transform.localPosition} - visible for solvability");
+            rb.isKinematic = true;
+            rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+            Log($"Cabinet content {go.name} placed inside {cabinetGo.name} at non-penetrating {localPos}");
         }
     }
 
     void RevealCabinetContents(GameObject cabinetGo)
     {
         string[] objNames = { "Puzzle book", "Puzzle book (1)", "Candle_low", "Candle_low (1)", "Vase", "Vase (1)" };
-        foreach (var n in objNames)
+        for (int idx = 0; idx < objNames.Length; idx++)
         {
+            var n = objNames[idx];
             var go = GameObject.Find(n);
             if (go == null) continue;
             var rend = go.GetComponent<Renderer>();
             if (rend != null) rend.enabled = true;
-            // Move to near cabinet front - VISIBLE carry
             go.transform.SetParent(null);
-            Vector3 frontPos = cabinetGo.transform.position + cabinetGo.transform.forward * 0.8f + new Vector3(Random.Range(-0.4f, 0.4f), 0.4f, Random.Range(-0.2f, 0.2f));
-            // Sample NavMesh for reachable
+            // Find non-penetrating spot in front of cabinet, spaced
+            Vector3 baseFront = cabinetGo.transform.position + cabinetGo.transform.forward * 0.9f;
+            Vector3 spacedOffset = new Vector3(((idx % 3) - 1) * 0.5f, 0.4f, (idx / 3) * 0.4f);
+            Vector3 frontPos = baseFront + spacedOffset;
+            // Ensure free
+            Vector3 size = go.transform.localScale;
+            if (size.magnitude < 0.1f) size = new Vector3(0.2f, 0.2f, 0.2f);
+            if (!IsSpotFree(frontPos, size * 1.2f))
+            {
+                frontPos = FindFreeSpotNear(baseFront, 1.0f, size);
+            }
+            // Sample NavMesh
             if (UnityEngine.AI.NavMesh.SamplePosition(frontPos, out var hit, 2f, UnityEngine.AI.NavMesh.AllAreas))
-                frontPos = hit.position;
+                frontPos = hit.position + Vector3.up * 0.05f;
+            // Ensure above floor
+            if (Physics.Raycast(frontPos + Vector3.up * 1f, Vector3.down, out var hitFloor, 2f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                frontPos.y = Mathf.Max(frontPos.y, hitFloor.point.y + 0.15f);
+            }
             go.transform.position = frontPos;
+            go.transform.rotation = Quaternion.identity;
             var rb = go.GetComponent<Rigidbody>();
             if (rb != null)
             {
                 rb.isKinematic = false;
+                rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
                 rb.WakeUp();
-                rb.AddForce(Vector3.up * 0.5f, ForceMode.Impulse);
+                rb.linearVelocity = Vector3.zero;
             }
-            // Ensure PlaceableItem for pickup
             var placeable = go.GetComponent<PlaceableItem>();
             if (placeable == null) placeable = go.AddComponent<PlaceableItem>();
             SetField(placeable, "itemId", go.name.ToLower().Contains("book") ? "book" : go.name.ToLower().Contains("candle") ? "candle" : "vase");
-            Log($"Revealed {go.name} at {frontPos} - now carryable");
+            Log($"Revealed {go.name} at non-penetrating {frontPos}");
         }
-        Log("Cabinet contents revealed: Book, Candle, Vase - now visible and carryable (fix 'nothing actually was carried')");
+        Log("Cabinet contents revealed non-penetrating: Book, Candle, Vase now visible and carryable");
     }
 
     void SetupPlaceable_GDD(string goName, string itemId, string displayName, bool isPrimary)
@@ -592,8 +619,20 @@ public class GDDPuzzleBootstrap : MonoBehaviour
 
         var slotGo = new GameObject(name + "_" + slotId);
         slotGo.transform.SetParent(parent.transform);
-        slotGo.transform.localPosition = localPos;
+        // Ensure slot is above table surface to avoid penetration
+        Vector3 safeLocal = localPos + Vector3.up * 0.05f;
+        slotGo.transform.localPosition = safeLocal;
         slotGo.transform.localRotation = Quaternion.identity;
+        // Check world free
+        Vector3 worldPos = parent.transform.TransformPoint(safeLocal);
+        if (!IsSpotFree(worldPos, new Vector3(0.6f, 0.25f, 0.6f)))
+        {
+            // Slight up offset
+            worldPos += Vector3.up * 0.1f;
+            safeLocal = parent.transform.InverseTransformPoint(worldPos);
+            slotGo.transform.localPosition = safeLocal;
+        }
+
         var col = slotGo.AddComponent<BoxCollider>();
         col.isTrigger = true;
         col.size = new Vector3(0.6f, 0.25f, 0.6f);
@@ -770,13 +809,31 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         {
             hammerPos = new Vector3(-2, 0.2f, -2);
         }
+        // Ensure hammer not penetrating sofa or floor
+        Vector3 hammerSize = hammerGo.transform.localScale;
+        if (hammerSize.magnitude < 0.1f) hammerSize = new Vector3(0.05f, 0.3f, 0.1f);
+        if (!IsSpotFree(hammerPos, hammerSize * 1.5f))
+        {
+            hammerPos = FindFreeSpotNear(hammerPos, 1.0f, hammerSize);
+        }
+        if (Physics.Raycast(hammerPos + Vector3.up * 1f, Vector3.down, out var hitHammerFloor, 2f, ~0, QueryTriggerInteraction.Ignore))
+        {
+            hammerPos.y = hitHammerFloor.point.y + 0.15f;
+        }
+        else
+        {
+            hammerPos.y = Mathf.Max(hammerPos.y, 0.15f);
+        }
         hammerGo.transform.position = hammerPos;
+        hammerGo.transform.rotation = Quaternion.identity;
         hammerGo.tag = "Hammer";
         if (hammerGo.GetComponent<Collider>() == null) hammerGo.AddComponent<BoxCollider>();
         var rb = hammerGo.GetComponent<Rigidbody>();
         if (rb == null) rb = hammerGo.AddComponent<Rigidbody>();
         rb.mass = 1f;
         rb.linearDamping = 0.5f;
+        rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+        rb.isKinematic = false;
         var hammerRend = hammerGo.GetComponent<Renderer>();
         if (hammerRend != null) hammerRend.material.color = new Color(0.5f, 0.5f, 0.5f);
 
@@ -866,7 +923,6 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             if (boxGo != null) boxes.Add(boxGo);
         }
 
-        // If not enough boxes, create some
         while (boxes.Count < 5)
         {
             var newBox = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -875,48 +931,73 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             boxes.Add(newBox);
         }
 
-        // Arrange boxes in a blocking pattern between sofa and hammer - solvable maze
         Vector3 center = (sofaPos + hammerPos) * 0.5f;
-        center.y = 0.3f;
+        center.y = 0.35f;
+        Vector3 dirToHammer = (hammerPos - sofaPos);
+        dirToHammer.y = 0;
+        if (dirToHammer == Vector3.zero) dirToHammer = Vector3.forward;
+        dirToHammer.Normalize();
+
         for (int i = 0; i < boxes.Count; i++)
         {
             var boxGo = boxes[i];
             var placeable = boxGo.GetComponent<PlaceableItem>();
             if (placeable == null) placeable = boxGo.AddComponent<PlaceableItem>();
             SetField(placeable, "itemId", "box_" + boxGo.name);
-            SetField(placeable, "displayName", "Box (push with MMB+mouse, scroll push/pull)");
+            SetField(placeable, "displayName", "Box (push MMB+mouse, scroll push/pull)");
             SetField(placeable, "carryStyle", PlaceableItem.CarryStyle.Spatial);
-            SetField(placeable, "defaultHoldDistance", 2f);
-            SetField(placeable, "minHoldDistance", 0.5f);
+            SetField(placeable, "defaultHoldDistance", 2.2f);
+            SetField(placeable, "minHoldDistance", 0.6f);
             SetField(placeable, "maxHoldDistance", 4f);
-            if (boxGo.GetComponent<Collider>() == null) boxGo.AddComponent<BoxCollider>();
+            var col = boxGo.GetComponent<Collider>();
+            if (col == null) col = boxGo.AddComponent<BoxCollider>();
             var rb2 = boxGo.GetComponent<Rigidbody>();
             if (rb2 == null) rb2 = boxGo.AddComponent<Rigidbody>();
-            rb2.mass = 4f;
-            rb2.linearDamping = 1.2f;
-            rb2.angularDamping = 2f;
+            rb2.mass = 3.5f;
+            rb2.linearDamping = 1.5f;
+            rb2.angularDamping = 3f;
             rb2.isKinematic = false;
+            rb2.collisionDetectionMode = CollisionDetectionMode.Continuous;
+            rb2.interpolation = RigidbodyInterpolation.Interpolate;
 
-            // Position in a line blocking hammer, but with gaps to make solvable
-            float angle = (i * 60f) * Mathf.Deg2Rad;
-            float radius = 0.8f + (i % 2) * 0.4f;
-            Vector3 offset = new Vector3(Mathf.Cos(angle) * radius, 0, Mathf.Sin(angle) * radius);
+            // Calculate non-penetrating position
+            Vector3 targetPos;
             if (i < 3)
             {
-                // First 3 boxes directly block path
-                Vector3 dir = (hammerPos - sofaPos).normalized;
-                dir.y = 0;
-                boxGo.transform.position = sofaPos + dir * (0.8f + i * 0.6f) + new Vector3(Random.Range(-0.3f, 0.3f), 0.3f, Random.Range(-0.3f, 0.3f));
+                // First 3 boxes block path but with clearance
+                targetPos = sofaPos + dirToHammer * (1.0f + i * 0.7f) + new Vector3(Random.Range(-0.2f, 0.2f), 0.35f, Random.Range(-0.2f, 0.2f));
             }
             else
             {
-                boxGo.transform.position = center + offset + new Vector3(0, 0.3f, 0);
+                float angle = (i * 70f) * Mathf.Deg2Rad;
+                float radius = 1.0f + (i % 2) * 0.3f;
+                Vector3 offset = new Vector3(Mathf.Cos(angle) * radius, 0, Mathf.Sin(angle) * radius);
+                targetPos = center + offset + new Vector3(0, 0.35f, 0);
             }
+
+            // Ensure not penetrating
+            Vector3 size = boxGo.transform.localScale;
+            if (!IsSpotFree(targetPos, size * 1.1f))
+            {
+                targetPos = FindFreeSpotNear(targetPos, 1.2f, size);
+            }
+            // Ensure on NavMesh or at least above floor
+            if (Physics.Raycast(targetPos + Vector3.up * 2f, Vector3.down, out var hitFloor, 3f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                targetPos.y = hitFloor.point.y + size.y * 0.5f + 0.05f;
+            }
+            else
+            {
+                targetPos.y = 0.35f;
+            }
+
+            boxGo.transform.position = targetPos;
+            boxGo.transform.rotation = Quaternion.identity;
 
             var rend = boxGo.GetComponent<Renderer>();
             if (rend != null) rend.material.color = new Color(0.7f, 0.5f, 0.3f);
         }
-        Log($"Boxes puzzle assembled: {boxes.Count} boxes blocking hammer, spatial carry (MMB+mouse, scroll) per GDD");
+        Log($"Boxes puzzle assembled non-penetrating: {boxes.Count} boxes blocking hammer, spaced to avoid collider penetration, spatial carry");
     }
 
     #endregion
@@ -1170,7 +1251,74 @@ public class GDDPuzzleBootstrap : MonoBehaviour
 
     #endregion
 
+    #region Helpers - Anti-penetration for solvable placement
+
+    Vector3 FindFreeSpotNear(Vector3 origin, float searchRadius, Vector3 objectSize, int attempts = 15)
+    {
+        // Try to find a spot not penetrating colliders
+        for (int i = 0; i < attempts; i++)
+        {
+            Vector3 candidate = origin + new Vector3(
+                Random.Range(-searchRadius, searchRadius),
+                0.1f,
+                Random.Range(-searchRadius, searchRadius)
+            );
+            // Ensure on NavMesh or at least not inside collider
+            if (IsSpotFree(candidate, objectSize))
+            {
+                // Also sample NavMesh if possible
+                if (UnityEngine.AI.NavMesh.SamplePosition(candidate, out var hit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+                {
+                    candidate = hit.position + Vector3.up * 0.05f;
+                }
+                return candidate;
+            }
+        }
+        // Fallback: origin with slight up offset
+        return origin + Vector3.up * 0.2f;
+    }
+
+    bool IsSpotFree(Vector3 pos, Vector3 size)
+    {
+        // Check if box at pos with size overlaps any collider (except triggers)
+        var halfExtents = size * 0.5f;
+        var cols = Physics.OverlapBox(pos, halfExtents, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+        foreach (var c in cols)
+        {
+            if (c == null) continue;
+            // Ignore small triggers and player
+            if (c.isTrigger) continue;
+            if (c.gameObject.CompareTag("Player")) continue;
+            if (c.transform.IsChildOf(transform)) continue;
+            // If overlap is significant, not free
+            return false;
+        }
+        return true;
+    }
+
+    Vector3 GetNonPenetratingPositionForCabinetContent(GameObject cabinetGo, int index, Vector3 baseSize)
+    {
+        // Place objects inside cabinet with spacing to avoid penetration
+        // Cabinet interior is roughly 0.5x0.5x0.5, place in grid
+        float spacing = 0.35f;
+        float x = ((index % 3) - 1) * spacing;
+        float z = ((index / 3) - 0.5f) * spacing;
+        float y = 0.25f + (index % 2) * 0.15f;
+        Vector3 localPos = new Vector3(x, y, z);
+        Vector3 worldPos = cabinetGo.transform.TransformPoint(localPos);
+        // Ensure free
+        if (!IsSpotFree(worldPos, baseSize))
+        {
+            worldPos = FindFreeSpotNear(cabinetGo.transform.position + cabinetGo.transform.forward * 0.3f + Vector3.up * 0.3f, 0.8f, baseSize);
+            localPos = cabinetGo.transform.InverseTransformPoint(worldPos);
+        }
+        return localPos;
+    }
+
+    #endregion
+
     #region Helpers
+
 
     void SpawnKey_GDD(GameObject parent, string keyId, string displayName, Vector3 localOffset)
     {
@@ -1179,12 +1327,23 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         keyGo.name = keyId;
         keyGo.transform.localScale = new Vector3(0.12f, 0.03f, 0.06f);
         Destroy(keyGo.GetComponent<Collider>());
-        keyGo.AddComponent<BoxCollider>();
+        var col = keyGo.AddComponent<BoxCollider>();
+        col.isTrigger = false;
         var rb = keyGo.AddComponent<Rigidbody>();
         rb.mass = 0.2f;
         rb.isKinematic = false;
+        rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
         keyGo.transform.SetParent(parent.transform);
-        keyGo.transform.localPosition = localOffset;
+        // Ensure localOffset is above surface to avoid penetration
+        Vector3 safeOffset = localOffset + Vector3.up * 0.1f;
+        // Check if spot is free in world
+        Vector3 worldCandidate = parent.transform.TransformPoint(safeOffset);
+        if (!IsSpotFree(worldCandidate, keyGo.transform.localScale))
+        {
+            worldCandidate = FindFreeSpotNear(parent.transform.position + Vector3.up * 0.3f + parent.transform.forward * 0.3f, 0.5f, keyGo.transform.localScale);
+            safeOffset = parent.transform.InverseTransformPoint(worldCandidate);
+        }
+        keyGo.transform.localPosition = safeOffset;
         keyGo.transform.localRotation = Quaternion.identity;
 
         var placeable = keyGo.AddComponent<PlaceableItem>();

@@ -218,6 +218,14 @@ public class AutoGameSolver : MonoBehaviour
         if (playerTransform == null) CachePlayer();
         if (playerTransform == null) yield break;
 
+        // Anti-penetration: if target is inside collider, find free spot near
+        if (!IsSpotFree(target, new Vector3(0.6f, 1.8f, 0.6f)))
+        {
+            Vector3 free = FindFreeSpotNear(target, 1.5f, new Vector3(0.6f, 0.1f, 0.6f));
+            Log($"Drive target {target} penetrating, using free spot {free} instead reason {reason}");
+            target = free;
+        }
+
         Log($"Driving player to {target} reason: {reason}");
 
         if (agent != null && agent.isOnNavMesh)
@@ -226,24 +234,74 @@ public class AutoGameSolver : MonoBehaviour
                 target = hit.position;
             agent.SetDestination(target);
             float timer = 0f;
+            float stuckTimer = 0f;
+            Vector3 lastPos = playerTransform.position;
             while (timer < driveWaitTimeout)
             {
                 if (!agent.pathPending && agent.remainingDistance <= 1.2f) break;
-                // also check direct distance
                 if (Vector3.Distance(playerTransform.position, target) <= 1.5f) break;
+
+                // Unstuck check
+                float moved = Vector3.Distance(playerTransform.position, lastPos);
+                if (moved < 0.05f && agent.velocity.magnitude < 0.1f && agent.remainingDistance > 1f)
+                {
+                    stuckTimer += Time.deltaTime;
+                    if (stuckTimer > 2f)
+                    {
+                        Log($"Drive stuck for {stuckTimer}s at {playerTransform.position}, warping or resetting");
+                        agent.ResetPath();
+                        // Try warp to free NavMesh near
+                        if (NavMesh.SamplePosition(playerTransform.position + Random.insideUnitSphere * 1f, out var warpHit, 2f, NavMesh.AllAreas))
+                        {
+                            agent.Warp(warpHit.position);
+                        }
+                        stuckTimer = 0f;
+                        // Re-set destination
+                        if (NavMesh.SamplePosition(target, out var hit2, 3f, NavMesh.AllAreas))
+                            agent.SetDestination(hit2.position);
+                        else
+                            agent.SetDestination(target);
+                    }
+                }
+                else
+                {
+                    stuckTimer = 0f;
+                    lastPos = playerTransform.position;
+                }
+
                 timer += Time.deltaTime;
                 yield return null;
+            }
+            if (timer >= driveWaitTimeout)
+            {
+                Log($"Drive timeout after {timer}s, remaining={agent.remainingDistance}, forcing direct move");
+                // Fallback direct
+                Vector3 start = playerTransform.position;
+                float timer2 = 0f;
+                while (timer2 < 3f && Vector3.Distance(playerTransform.position, target) > 1f)
+                {
+                    Vector3 dir = (target - playerTransform.position);
+                    dir.y = 0;
+                    if (dir.magnitude > 0.1f)
+                    {
+                        dir.Normalize();
+                        playerTransform.position += dir * 4f * Time.deltaTime;
+                    }
+                    timer2 += Time.deltaTime;
+                    yield return null;
+                }
             }
             Log($"Drive finished: remainingDistance={agent.remainingDistance} timer={timer} distToTarget={Vector3.Distance(playerTransform.position, target)}");
         }
         else
         {
-            // fallback direct lerp
             Vector3 start = playerTransform.position;
             float timer = 0f;
             float dist = Vector3.Distance(start, target);
             float duration = dist / 3.5f;
             duration = Mathf.Clamp(duration, 0.5f, driveWaitTimeout);
+            Vector3 lastPos = start;
+            float stuckT = 0f;
             while (timer < duration)
             {
                 if (Vector3.Distance(playerTransform.position, target) < 1.0f) break;
@@ -255,12 +313,57 @@ public class AutoGameSolver : MonoBehaviour
                     playerTransform.position += dir * 3.5f * Time.deltaTime;
                     playerTransform.rotation = Quaternion.Slerp(playerTransform.rotation, Quaternion.LookRotation(dir), Time.deltaTime * 5f);
                 }
+                // stuck
+                if (Vector3.Distance(playerTransform.position, lastPos) < 0.05f)
+                {
+                    stuckT += Time.deltaTime;
+                    if (stuckT > 2f)
+                    {
+                        playerTransform.position += Vector3.up * 0.2f + Random.insideUnitSphere * 0.3f;
+                        stuckT = 0f;
+                    }
+                }
+                else
+                {
+                    stuckT = 0f;
+                    lastPos = playerTransform.position;
+                }
                 timer += Time.deltaTime;
                 yield return null;
             }
         }
         yield return new WaitForSeconds(0.3f);
     }
+
+    bool IsSpotFree(Vector3 pos, Vector3 size)
+    {
+        var cols = Physics.OverlapBox(pos, size * 0.5f, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+        foreach (var c in cols)
+        {
+            if (c == null) continue;
+            if (c.isTrigger) continue;
+            if (c.gameObject.CompareTag("Player")) continue;
+            if (playerTransform != null && c.transform.IsChildOf(playerTransform)) continue;
+            return false;
+        }
+        return true;
+    }
+
+    Vector3 FindFreeSpotNear(Vector3 origin, float radius, Vector3 size)
+    {
+        for (int i = 0; i < 20; i++)
+        {
+            Vector3 cand = origin + new Vector3(Random.Range(-radius, radius), 0.1f, Random.Range(-radius, radius));
+            if (IsSpotFree(cand, size))
+            {
+                if (NavMesh.SamplePosition(cand, out var hit, 2f, NavMesh.AllAreas))
+                    cand = hit.position + Vector3.up * 0.05f;
+                return cand;
+            }
+        }
+        return origin + Vector3.up * 0.3f;
+    }
+
 
     IEnumerator FindAndCollectKey(string keyId, string hintObjectName, string reason, GameObject hintLocation = null)
     {
@@ -502,6 +605,15 @@ public class AutoGameSolver : MonoBehaviour
     void TryPickup(PlaceableItem item)
     {
         if (item == null) return;
+        // If item is penetrating, move it to free spot first
+        if (!IsSpotFree(item.transform.position, item.transform.localScale * 1.1f))
+        {
+            Vector3 free = FindFreeSpotNear(item.transform.position, 0.8f, item.transform.localScale);
+            Log($"TryPickup {item.name} was penetrating at {item.transform.position}, moving to free {free}");
+            item.transform.position = free;
+            var rbPen = item.GetComponent<Rigidbody>();
+            if (rbPen != null) { rbPen.linearVelocity = Vector3.zero; rbPen.angularVelocity = Vector3.zero; }
+        }
         var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
         if (carry == null)
         {
@@ -511,18 +623,34 @@ public class AutoGameSolver : MonoBehaviour
         }
         if (!carry.IsCarrying)
         {
-            // Ensure visible
             var rend = item.GetComponent<Renderer>();
             if (rend != null) rend.enabled = true;
             var rb = item.GetComponent<Rigidbody>();
-            if (rb != null) rb.isKinematic = false;
+            if (rb != null)
+            {
+                rb.isKinematic = false;
+                rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+                rb.WakeUp();
+            }
+            // Ensure not inside cabinet collider etc
+            if (item.transform.parent != null && item.transform.parent.GetComponent<Collider>() != null)
+            {
+                item.transform.SetParent(null);
+            }
             bool ok = carry.TryPickUp(item);
             Log($"TryPickup {item.DisplayName} ({item.name}) => {ok}, IsHeld={item.IsHeld}, carry pos={item.transform.position}");
         }
         else
         {
-            Log($"TryPickup {item.name} but already carrying {carry.HeldItem?.name}, using OnInteract fallback");
-            item.OnInteract();
+            Log($"TryPickup {item.name} but already carrying {carry.HeldItem?.name}, dropping current then picking");
+            carry.DropInWorld();
+            // Wait a frame via coroutine not possible here, but try immediate
+            var rend = item.GetComponent<Renderer>();
+            if (rend != null) rend.enabled = true;
+            var rb = item.GetComponent<Rigidbody>();
+            if (rb != null) rb.isKinematic = false;
+            bool ok = carry.TryPickUp(item);
+            Log($"Second TryPickup {item.name} => {ok}");
         }
     }
 

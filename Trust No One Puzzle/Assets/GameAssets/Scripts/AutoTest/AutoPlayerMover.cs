@@ -156,6 +156,10 @@ public class AutoPlayerMover : MonoBehaviour
     }
 
     private float _phoneOpenTimer = 0f;
+    private float _stuckTimer = 0f;
+    private Vector3 _lastPosition;
+    private float _lastRemainingDistance = float.MaxValue;
+    private int _unstuckAttempts = 0;
 
     private void Update()
     {
@@ -184,10 +188,29 @@ public class AutoPlayerMover : MonoBehaviour
         }
         catch { }
 
+        // Check if player is penetrating colliders - warp out
+        if (IsPlayerPenetrating())
+        {
+            Debug.LogWarning("[AutoPlayerMover] Player penetrating colliders, warping to free spot");
+            if (_agent != null && NavMesh.SamplePosition(transform.position + Random.insideUnitSphere * 1f, out var freeHit, 2f, NavMesh.AllAreas))
+            {
+                _agent.Warp(freeHit.position);
+                transform.position = freeHit.position;
+            }
+            else
+            {
+                transform.position += Vector3.up * 0.3f + Random.insideUnitSphere * 0.5f;
+            }
+            _stuckTimer = 0f;
+        }
+
         if (_agent != null && !_agent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out var hit, 10f, NavMesh.AllAreas))
+            {
                 _agent.Warp(hit.position);
+                Debug.Log($"[AutoPlayerMover] Warped to NavMesh at {hit.position}");
+            }
             else if (fallbackDirectMove && _hasFallbackTarget)
             {
                 UpdateFallbackMove();
@@ -196,16 +219,109 @@ public class AutoPlayerMover : MonoBehaviour
             else return;
         }
 
-        // Fallback direct movement if NavMeshAgent fails
-        if (fallbackDirectMove && _hasFallbackTarget && _agent != null && (!_agent.isOnNavMesh || !_agent.hasPath))
+        // Fallback direct movement if NavMeshAgent fails or stuck
+        if (fallbackDirectMove && _hasFallbackTarget && _agent != null && (!_agent.isOnNavMesh || !_agent.hasPath || _agent.velocity.magnitude < 0.1f))
         {
-            UpdateFallbackMove();
+            // If agent velocity low but we have target, use direct move as backup
+            if (_agent != null && _agent.isOnNavMesh && _agent.hasPath && _agent.remainingDistance > 1f && _agent.velocity.magnitude < 0.1f)
+            {
+                // Agent stuck, try direct
+                UpdateFallbackMove();
+            }
+            else if (_agent == null || !_agent.isOnNavMesh || !_agent.hasPath)
+            {
+                UpdateFallbackMove();
+            }
+        }
+
+        // Unstuck detection - if not moving and remaining distance not decreasing
+        bool isStuck = false;
+        if (_agent != null && _agent.isOnNavMesh && _agent.hasPath)
+        {
+            float moved = Vector3.Distance(transform.position, _lastPosition);
+            float remaining = _agent.remainingDistance;
+            bool velocityLow = _agent.velocity.magnitude < 0.15f;
+            bool distanceNotDecreasing = Mathf.Abs(remaining - _lastRemainingDistance) < 0.05f && remaining > 1f;
+
+            if (velocityLow && distanceNotDecreasing)
+            {
+                _stuckTimer += Time.deltaTime;
+                if (_stuckTimer > 2.5f)
+                {
+                    isStuck = true;
+                }
+            }
+            else
+            {
+                _stuckTimer = 0f;
+            }
+
+            _lastPosition = transform.position;
+            _lastRemainingDistance = remaining;
+        }
+        else if (_hasFallbackTarget)
+        {
+            float moved = Vector3.Distance(transform.position, _lastPosition);
+            if (moved < 0.05f)
+            {
+                _stuckTimer += Time.deltaTime;
+                if (_stuckTimer > 2.5f) isStuck = true;
+            }
+            else
+            {
+                _stuckTimer = 0f;
+            }
+            _lastPosition = transform.position;
+        }
+
+        if (isStuck)
+        {
+            Debug.LogWarning($"[AutoPlayerMover] STUCK detected for {_stuckTimer}s at {transform.position}, target {_fallbackTarget}, remaining {_lastRemainingDistance}, velocity {_agent?.velocity.magnitude} - attempting unstuck #{_unstuckAttempts}");
+            _stuckTimer = 0f;
+            _unstuckAttempts++;
+
+            // Try unstuck strategies
+            if (_unstuckAttempts % 3 == 0)
+            {
+                // Warp to nearest NavMesh
+                if (_agent != null && NavMesh.SamplePosition(transform.position + Random.insideUnitSphere * 2f, out var hit, 3f, NavMesh.AllAreas))
+                {
+                    _agent.Warp(hit.position);
+                    Debug.Log($"[AutoPlayerMover] Unstuck: warped to {hit.position}");
+                }
+            }
+            else if (_unstuckAttempts % 3 == 1)
+            {
+                // Reset path and try direct move
+                if (_agent != null) _agent.ResetPath();
+                _hasFallbackTarget = true;
+                UpdateFallbackMove();
+                Debug.Log("[AutoPlayerMover] Unstuck: reset path, using direct move");
+            }
+            else
+            {
+                // Pick new target
+                SetNextPuzzleDestination();
+                Debug.Log("[AutoPlayerMover] Unstuck: picking new destination");
+            }
+
+            if (_unstuckAttempts > 10)
+            {
+                _unstuckAttempts = 0;
+                // Force find dynamic target
+                TryFindDynamicTarget();
+            }
         }
 
         bool reached = false;
         if (_agent != null && _agent.isOnNavMesh)
         {
-            reached = !_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.3f;
+            reached = !_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.5f;
+            // Also check direct distance as backup
+            if (!reached && _hasFallbackTarget)
+            {
+                reached = Vector3.Distance(transform.position, _fallbackTarget) <= waypointReachDistance + 0.8f;
+            }
         }
         else if (_hasFallbackTarget)
         {
@@ -214,6 +330,8 @@ public class AutoPlayerMover : MonoBehaviour
 
         if (reached)
         {
+            _stuckTimer = 0f;
+            _unstuckAttempts = 0;
             if (_actionTimer <= 0f)
             {
                 bool didAction = TryAutoInteract();
@@ -223,6 +341,29 @@ public class AutoPlayerMover : MonoBehaviour
             SetNextPuzzleDestination();
         }
     }
+
+    bool IsPlayerPenetrating()
+    {
+        // Check if player is inside a non-trigger collider
+        var cols = Physics.OverlapBox(transform.position + Vector3.up * 0.9f, new Vector3(0.3f, 0.8f, 0.3f), Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+        foreach (var c in cols)
+        {
+            if (c == null) continue;
+            if (c.isTrigger) continue;
+            if (c.gameObject == gameObject) continue;
+            if (c.transform.IsChildOf(transform)) continue;
+            // If overlapping with furniture that has Rigidbody kinematic, likely penetrating
+            var rb = c.attachedRigidbody;
+            if (rb != null && rb.isKinematic)
+            {
+                // Check if player is inside
+                if (c.bounds.Contains(transform.position + Vector3.up * 0.9f))
+                    return true;
+            }
+        }
+        return false;
+    }
+
 
     // Public API for AutoGameSolver to drive player to specific position
     public void GoToPosition(Vector3 pos)
