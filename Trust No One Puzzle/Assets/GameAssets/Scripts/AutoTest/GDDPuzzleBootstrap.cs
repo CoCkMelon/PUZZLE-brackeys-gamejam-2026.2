@@ -392,7 +392,12 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         if (toolboxGo != null)
         {
             var toolbox = toolboxGo.GetComponent<ToolBoxInteractable>();
-            if (toolbox == null) toolbox = toolboxGo.AddComponent<ToolBoxInteractable>();
+            bool wasNew = false;
+            if (toolbox == null)
+            {
+                toolbox = toolboxGo.AddComponent<ToolBoxInteractable>();
+                wasNew = true;
+            }
             if (toolbox.OnUnlocked == null) toolbox.OnUnlocked = new UnityEngine.Events.UnityEvent();
             if (toolbox.OnOpened == null) toolbox.OnOpened = new UnityEngine.Events.UnityEvent();
             if (toolbox.OnClosed == null) toolbox.OnClosed = new UnityEngine.Events.UnityEvent();
@@ -400,6 +405,80 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             SetField(toolbox, "startsLocked", true);
             SetField(toolbox, "requiredKeyId", toolboxKeyId);
             SetField(toolbox, "unlockWithKey", true);
+
+            // FIX: No cover transform assigned on tool Box! -> assign cover
+            var coverField = typeof(ToolBoxInteractable).GetField("cover", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            Transform currentCover = null;
+            if (coverField != null) currentCover = coverField.GetValue(toolbox) as Transform;
+            if (currentCover == null)
+            {
+                Transform foundCover = null;
+                // Search common names
+                string[] coverNames = { "Cover", "Lid", "Top", "tool Box_Cover", "ToolBox_Cover", "CoverMesh", "tool Box Lid" };
+                foreach (var cname in coverNames)
+                {
+                    var child = toolboxGo.transform.Find(cname);
+                    if (child != null) { foundCover = child; break; }
+                    var go = GameObject.Find(cname);
+                    if (go != null && go.transform.IsChildOf(toolboxGo.transform)) { foundCover = go.transform; break; }
+                }
+                // Search any child with MeshRenderer that is not bottom
+                if (foundCover == null)
+                {
+                    foreach (Transform child in toolboxGo.transform)
+                    {
+                        if (child.name.ToLower().Contains("bottom")) continue;
+                        if (child.GetComponent<MeshRenderer>() != null || child.GetComponentInChildren<MeshRenderer>() != null)
+                        {
+                            foundCover = child;
+                            break;
+                        }
+                    }
+                }
+                // If still not found, create dummy cover
+                if (foundCover == null)
+                {
+                    var dummy = new GameObject("Cover_Auto");
+                    dummy.transform.SetParent(toolboxGo.transform);
+                    dummy.transform.localPosition = new Vector3(0, 0.15f, 0);
+                    dummy.transform.localRotation = Quaternion.identity;
+                    dummy.transform.localScale = new Vector3(0.9f, 0.1f, 0.6f);
+                    var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    cube.transform.SetParent(dummy.transform);
+                    cube.transform.localPosition = Vector3.zero;
+                    cube.transform.localRotation = Quaternion.identity;
+                    cube.transform.localScale = Vector3.one;
+                    // Remove collider from visual cube to avoid duplicate
+                    DestroyImmediate(cube.GetComponent<Collider>());
+                    foundCover = dummy.transform;
+                    Debug.Log($"[GDD] Created dummy cover for toolbox {toolboxGo.name}");
+                }
+
+                if (foundCover != null)
+                {
+                    SetField(toolbox, "cover", foundCover);
+                    Debug.Log($"[GDD] Assigned cover {foundCover.name} to toolbox {toolboxGo.name}");
+
+                    // Re-init closed/open rotation because Awake already ran and failed
+                    try
+                    {
+                        var closedRot = foundCover.localRotation;
+                        SetField(toolbox, "_closedRotation", closedRot);
+                        var hingeAxis = GetField<Vector3>(toolbox, "hingeAxis");
+                        if (hingeAxis == Vector3.zero) hingeAxis = Vector3.right;
+                        var openAngle = GetField<float>(toolbox, "openAngle");
+                        if (openAngle == 0) openAngle = -110f;
+                        var openRot = closedRot * Quaternion.AngleAxis(openAngle, hingeAxis);
+                        SetField(toolbox, "_openRotation", openRot);
+                        SetField(toolbox, "_isLocked", true);
+                        Debug.Log($"[GDD] Re-initialized toolbox rotations closed={closedRot} open={openRot}");
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogWarning($"[GDD] Failed to re-init toolbox rotations: {ex.Message}");
+                    }
+                }
+            }
 
             toolbox.OnUnlocked.AddListener(() =>
             {
@@ -679,5 +758,17 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         {
             try { field.SetValue(obj, value); return; } catch { }
         }
+    }
+
+    T GetField<T>(object obj, string fieldName)
+    {
+        if (obj == null) return default;
+        var type = obj.GetType();
+        var field = type.GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+        if (field != null)
+        {
+            try { return (T)field.GetValue(obj); } catch { }
+        }
+        return default;
     }
 }
