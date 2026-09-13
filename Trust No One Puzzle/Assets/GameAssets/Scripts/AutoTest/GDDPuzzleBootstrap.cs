@@ -56,8 +56,58 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         SetupRoom1();
         SetupRoom2();
         SetupEnding();
+        SetupWaypointsForMover();
         SetupPhoneStory();
-        Debug.Log("[GDDPuzzleBootstrap] Setup complete");
+        Debug.Log("[GDDPuzzleBootstrap] Setup complete - scene assembled");
+    }
+
+    void SetupWaypointsForMover()
+    {
+        // Assemble waypoints for AutoPlayerMover so it doesn't need manual assignment
+        var player = GameObject.FindWithTag("Player");
+        if (player == null) player = GameObject.Find("Player FPP");
+        if (player == null) return;
+        var mover = player.GetComponent<AutoPlayerMover>();
+        if (mover == null) return;
+
+        Transform CreateWaypoint(string name, Vector3 pos)
+        {
+            var existing = GameObject.Find(name);
+            if (existing != null) return existing.transform;
+            var go = new GameObject(name);
+            go.transform.position = pos;
+            return go.transform;
+        }
+
+        var table = GameObject.Find("Table");
+        var cabinet = GameObject.Find("Cabin 8") ?? GameObject.Find("Cabin 1");
+        var drawer1 = GameObject.Find("Drawer 1") ?? GameObject.Find("Cabin 4");
+        var drawer2 = GameObject.Find("Drawer 2") ?? GameObject.Find("Cabin 6");
+        var toolbox = GameObject.Find("tool Box") ?? GameObject.Find("Tool Box");
+        var hammer = GameObject.Find("Hammer") ?? GameObject.Find("Hammer.001");
+        var sofa = GameObject.Find("chair 2");
+        var window = GameObject.Find("BreakableWindow_GDD") ?? GameObject.Find("Breakable Window");
+
+        Vector3 basePos = table != null ? table.transform.position : Vector3.zero;
+
+        var wpMirrorKey = CreateWaypoint("WP_MirrorKey", basePos + new Vector3(0, 0, 0.5f));
+        var wpCabinet = CreateWaypoint("WP_Cabinet", cabinet != null ? cabinet.transform.position + Vector3.forward : basePos + new Vector3(2, 0, 0));
+        var wpTable = CreateWaypoint("WP_Table", basePos);
+        var wpDrawer = CreateWaypoint("WP_ToolboxDrawer", drawer2 != null ? drawer2.transform.position + Vector3.forward : basePos + new Vector3(-2, 0, 0));
+        var wpToolbox = CreateWaypoint("WP_Toolbox", toolbox != null ? toolbox.transform.position + Vector3.forward : basePos + new Vector3(0, 0, 2));
+        var wpSofa = CreateWaypoint("WP_SofaHammer", sofa != null ? sofa.transform.position + Vector3.forward : (hammer != null ? hammer.transform.position : basePos + new Vector3(-3, 0, 0)));
+        var wpWindow = CreateWaypoint("WP_Window", window != null ? window.transform.position + Vector3.back : basePos + new Vector3(5, 0, 0));
+
+        // Assign via reflection to private fields
+        SetField(mover, "mirrorKeyLocation", wpMirrorKey);
+        SetField(mover, "cabinetLocation", wpCabinet);
+        SetField(mover, "placementTableLocation", wpTable);
+        SetField(mover, "toolboxDrawerLocation", wpDrawer);
+        SetField(mover, "toolboxLocation", wpToolbox);
+        SetField(mover, "sofaHammerLocation", wpSofa);
+        SetField(mover, "windowLocation", wpWindow);
+
+        Debug.Log($"[GDD] Waypoints assembled for AutoPlayerMover: mirrorKey={wpMirrorKey.position}, cabinet={wpCabinet.position}, table={wpTable.position}, drawer={wpDrawer.position}, toolbox={wpToolbox.position}, sofa={wpSofa.position}, window={wpWindow.position}");
     }
 
     void SetupFurnitureRigidbodies()
