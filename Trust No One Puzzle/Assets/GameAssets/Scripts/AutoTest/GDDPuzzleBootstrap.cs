@@ -1141,6 +1141,41 @@ public class GDDPuzzleBootstrap : MonoBehaviour
                 }
             });
             Log($"Ending window setup: {glass.name} at {glass.transform.position} on wall, glass material, fracture {GetField<int>(glass, "fracturePieces")} pieces, breakable with Hammer");
+
+            // FIX: Ensure player starts at valid free NavMesh spot, not inside wall (fixes wall stare video)
+            try
+            {
+                var player = GameObject.FindWithTag("Player");
+                if (player == null) player = GameObject.Find("Player FPP");
+                if (player == null)
+                {
+                    var cc = FindFirstObjectByType<CharacterController>();
+                    if (cc != null) player = cc.gameObject;
+                }
+                if (player != null)
+                {
+                    Vector3 startPos = new Vector3(0, 1f, 0);
+                    // Try to find free spot near table or near 0,1,0
+                    var table = GameObject.Find("Table");
+                    if (table != null) startPos = table.transform.position + new Vector3(0, 1f, -2f);
+                    // Sample NavMesh
+                    if (UnityEngine.AI.NavMesh.SamplePosition(startPos, out var hit, 5f, UnityEngine.AI.NavMesh.AllAreas))
+                        startPos = hit.position;
+                    else
+                        startPos = FindFreeSpotNear(startPos, 2f, new Vector3(0.6f, 1.8f, 0.6f));
+                    player.transform.position = startPos;
+                    var agent = player.GetComponent<UnityEngine.AI.NavMeshAgent>();
+                    if (agent != null && agent.isOnNavMesh) agent.Warp(startPos);
+                    else if (agent != null)
+                    {
+                        if (UnityEngine.AI.NavMesh.SamplePosition(startPos, out var hit2, 5f, UnityEngine.AI.NavMesh.AllAreas))
+                            agent.Warp(hit2.position);
+                    }
+                    Log($"Player warped to valid start {startPos} to avoid wall stare");
+                }
+            }
+            catch (System.Exception e) { Log($"Player warp fix exception: {e.Message}"); }
+
         }
     }
 

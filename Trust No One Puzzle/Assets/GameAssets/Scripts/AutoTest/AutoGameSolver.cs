@@ -81,13 +81,70 @@ public class AutoGameSolver : MonoBehaviour
             var cc = FindFirstObjectByType<CharacterController>();
             if (cc != null) player = cc.gameObject;
         }
+        if (player == null)
+        {
+            var carry = FindFirstObjectByType<PlayerCarry>();
+            if (carry != null) player = carry.gameObject;
+        }
         if (player != null)
         {
             playerTransform = player.transform;
             agent = player.GetComponent<NavMeshAgent>();
+            if (agent == null) agent = player.GetComponentInChildren<NavMeshAgent>();
+            if (agent == null)
+            {
+                var moverTmp = player.GetComponent<AutoPlayerMover>();
+                if (moverTmp == null) moverTmp = player.AddComponent<AutoPlayerMover>();
+                agent = player.GetComponent<NavMeshAgent>();
+            }
             mover = player.GetComponent<AutoPlayerMover>();
+            if (mover == null) mover = player.GetComponentInChildren<AutoPlayerMover>();
+            try
+            {
+                if (agent != null && !agent.isOnNavMesh)
+                {
+                    if (NavMesh.SamplePosition(playerTransform.position, out var hit, 5f, NavMesh.AllAreas))
+                    {
+                        agent.Warp(hit.position);
+                        Log($"CachePlayer: Warped to NavMesh {hit.position}");
+                    }
+                    else if (NavMesh.SamplePosition(playerTransform.position + Vector3.up * 2f, out var hit2, 10f, NavMesh.AllAreas))
+                    {
+                        agent.Warp(hit2.position);
+                        playerTransform.position = hit2.position;
+                    }
+                    else
+                    {
+                        Vector3 fallback = new Vector3(0, 1f, 0);
+                        if (NavMesh.SamplePosition(fallback, out var hit3, 10f, NavMesh.AllAreas))
+                        {
+                            agent.Warp(hit3.position);
+                            playerTransform.position = hit3.position;
+                        }
+                        else playerTransform.position = fallback;
+                    }
+                }
+                else if (agent == null && IsSpotPenetrating(playerTransform.position))
+                {
+                    playerTransform.position = new Vector3(0, 1f, 0);
+                    Log("CachePlayer: No agent, moved to 0,1,0 to avoid wall");
+                }
+            }
+            catch (System.Exception e) { Log($"CachePlayer warp exception: {e.Message}"); }
         }
     }
+
+    bool IsSpotPenetrating(Vector3 pos)
+    {
+        var cols = Physics.OverlapBox(pos, new Vector3(0.3f, 0.9f, 0.3f), Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+        foreach (var c in cols)
+        {
+            if (c == null || c.isTrigger) continue;
+            if (c.bounds.Contains(pos) && c.bounds.size.magnitude > 1f) return true;
+        }
+        return false;
+    }
+
 
     public void StartSolving()
     {
@@ -193,16 +250,42 @@ public class AutoGameSolver : MonoBehaviour
     IEnumerator WaitAndClosePhone(float delay)
     {
         yield return new WaitForSeconds(delay);
-        ClosePhone();
+        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception (ignored): {e.Message}"); }
+        try
+        {
+            var phone = MobilePhoneController.Instance;
+            if (phone == null) phone = FindFirstObjectByType<MobilePhoneController>();
+            if (phone != null && phone.IsOpen)
+            {
+                phone.SetOpen(false);
+                var doc = phone.GetComponent<UnityEngine.UIElements.UIDocument>();
+                if (doc != null && doc.rootVisualElement != null)
+                {
+                    var root = doc.rootVisualElement.Q("phone-root");
+                    if (root != null) root.EnableInClassList("hidden", true);
+                }
+            }
+        } catch { }
+        yield return null;
     }
 
     void ClosePhone()
     {
-        var phone = MobilePhoneController.Instance;
-        if (phone != null && phone.IsOpen)
+        try
         {
-            phone.SetOpen(false);
-            Log("Closed phone (auto-close fix)");
+            var phone = MobilePhoneController.Instance;
+            if (phone == null) phone = FindFirstObjectByType<MobilePhoneController>();
+            if (phone != null)
+            {
+                if (phone.IsOpen) phone.SetOpen(false);
+                Log("Closed phone (auto-close fix)");
+                UnityEngine.Cursor.lockState = UnityEngine.CursorLockMode.None;
+                UnityEngine.Cursor.visible = true;
+            }
+        }
+        catch (System.Exception e)
+        {
+            Log($"ClosePhone failed: {e.Message} - continuing anyway");
         }
     }
 
@@ -214,125 +297,97 @@ public class AutoGameSolver : MonoBehaviour
 
     IEnumerator DrivePlayerTo(Vector3 target, string reason)
     {
+        CachePlayer();
         if (!drivePlayerToTargets) yield break;
-        if (playerTransform == null) CachePlayer();
-        if (playerTransform == null) yield break;
+        if (playerTransform == null) { Log("DrivePlayerTo: null, re-caching"); CachePlayer(); }
+        if (playerTransform == null) { Log("DrivePlayerTo: still null, abort"); yield break; }
 
-        // Anti-penetration: if target is inside collider, find free spot near
         if (!IsSpotFree(target, new Vector3(0.6f, 1.8f, 0.6f)))
         {
             Vector3 free = FindFreeSpotNear(target, 1.5f, new Vector3(0.6f, 0.1f, 0.6f));
-            Log($"Drive target {target} penetrating, using free spot {free} instead reason {reason}");
+            Log($"Drive target {target} penetrating, using free {free} reason {reason}");
             target = free;
         }
 
-        Log($"Driving player to {target} reason: {reason}");
+        Log($"Driving player to {target} reason: {reason} agent null? {agent==null} onNavMesh? {agent?.isOnNavMesh}");
 
-        if (agent != null && agent.isOnNavMesh)
+        if (agent != null)
         {
-            if (NavMesh.SamplePosition(target, out var hit, 3f, NavMesh.AllAreas))
-                target = hit.position;
-            agent.SetDestination(target);
-            float timer = 0f;
-            float stuckTimer = 0f;
-            Vector3 lastPos = playerTransform.position;
-            while (timer < driveWaitTimeout)
+            try
             {
-                if (!agent.pathPending && agent.remainingDistance <= 1.2f) break;
-                if (Vector3.Distance(playerTransform.position, target) <= 1.5f) break;
-
-                // Unstuck check
-                float moved = Vector3.Distance(playerTransform.position, lastPos);
-                if (moved < 0.05f && agent.velocity.magnitude < 0.1f && agent.remainingDistance > 1f)
+                if (!agent.isOnNavMesh)
                 {
-                    stuckTimer += Time.deltaTime;
-                    if (stuckTimer > 2f)
+                    if (NavMesh.SamplePosition(playerTransform.position, out var hitSelf, 5f, NavMesh.AllAreas))
                     {
-                        Log($"Drive stuck for {stuckTimer}s at {playerTransform.position}, warping or resetting");
-                        agent.ResetPath();
-                        // Try warp to free NavMesh near
-                        if (NavMesh.SamplePosition(playerTransform.position + Random.insideUnitSphere * 1f, out var warpHit, 2f, NavMesh.AllAreas))
+                        agent.Warp(hitSelf.position);
+                    }
+                    else if (NavMesh.SamplePosition(target, out var hitT, 5f, NavMesh.AllAreas))
+                    {
+                        agent.Warp(hitT.position);
+                        playerTransform.position = hitT.position;
+                        yield break;
+                    }
+                }
+
+                if (agent.isOnNavMesh)
+                {
+                    if (NavMesh.SamplePosition(target, out var hit, 3f, NavMesh.AllAreas))
+                        target = hit.position;
+                    agent.SetDestination(target);
+                    float timer = 0f;
+                    float stuckTimer = 0f;
+                    Vector3 lastPos = playerTransform.position;
+                    while (timer < driveWaitTimeout)
+                    {
+                        if (!agent.pathPending && agent.remainingDistance <= 1.2f) break;
+                        if (Vector3.Distance(playerTransform.position, target) <= 1.5f) break;
+                        float moved = Vector3.Distance(playerTransform.position, lastPos);
+                        if (moved < 0.05f && agent.velocity.magnitude < 0.1f && agent.remainingDistance > 1f)
                         {
-                            agent.Warp(warpHit.position);
+                            stuckTimer += Time.deltaTime;
+                            if (stuckTimer > 2f)
+                            {
+                                agent.ResetPath();
+                                if (NavMesh.SamplePosition(playerTransform.position + UnityEngine.Random.insideUnitSphere * 1f, out var freeHit, 2f, NavMesh.AllAreas))
+                                {
+                                    agent.Warp(freeHit.position);
+                                    playerTransform.position = freeHit.position;
+                                }
+                                else break;
+                                stuckTimer = 0f;
+                            }
                         }
-                        stuckTimer = 0f;
-                        // Re-set destination
-                        if (NavMesh.SamplePosition(target, out var hit2, 3f, NavMesh.AllAreas))
-                            agent.SetDestination(hit2.position);
-                        else
-                            agent.SetDestination(target);
+                        else { stuckTimer = 0f; lastPos = playerTransform.position; }
+                        timer += Time.deltaTime;
+                        yield return null;
                     }
+                    yield return new WaitForSeconds(0.1f);
+                    yield break;
                 }
-                else
-                {
-                    stuckTimer = 0f;
-                    lastPos = playerTransform.position;
-                }
+            }
+            catch (System.Exception e) { Log($"Drive NavMesh ex: {e.Message}, fallback direct"); }
+        }
 
-                timer += Time.deltaTime;
-                yield return null;
-            }
-            if (timer >= driveWaitTimeout)
-            {
-                Log($"Drive timeout after {timer}s, remaining={agent.remainingDistance}, forcing direct move");
-                // Fallback direct
-                Vector3 start = playerTransform.position;
-                float timer2 = 0f;
-                while (timer2 < 3f && Vector3.Distance(playerTransform.position, target) > 1f)
-                {
-                    Vector3 dir = (target - playerTransform.position);
-                    dir.y = 0;
-                    if (dir.magnitude > 0.1f)
-                    {
-                        dir.Normalize();
-                        playerTransform.position += dir * 4f * Time.deltaTime;
-                    }
-                    timer2 += Time.deltaTime;
-                    yield return null;
-                }
-            }
-            Log($"Drive finished: remainingDistance={agent.remainingDistance} timer={timer} distToTarget={Vector3.Distance(playerTransform.position, target)}");
-        }
-        else
+        Log($"Fallback direct move to {target} reason {reason}");
+        float directTimer = 0f;
+        float directDuration = Mathf.Clamp(Vector3.Distance(playerTransform.position, target) / 3.5f, 0.5f, 5f);
+        Vector3 startPos = playerTransform.position;
+        while (directTimer < directDuration)
         {
-            Vector3 start = playerTransform.position;
-            float timer = 0f;
-            float dist = Vector3.Distance(start, target);
-            float duration = dist / 3.5f;
-            duration = Mathf.Clamp(duration, 0.5f, driveWaitTimeout);
-            Vector3 lastPos = start;
-            float stuckT = 0f;
-            while (timer < duration)
+            directTimer += Time.deltaTime;
+            float t = directTimer / directDuration;
+            Vector3 newPos = Vector3.Lerp(startPos, target, t);
+            playerTransform.position = newPos;
+            Vector3 dir = target - playerTransform.position; dir.y = 0;
+            if (dir.magnitude > 0.1f)
             {
-                if (Vector3.Distance(playerTransform.position, target) < 1.0f) break;
-                Vector3 dir = (target - playerTransform.position);
-                dir.y = 0;
-                if (dir.magnitude > 0.1f)
-                {
-                    dir.Normalize();
-                    playerTransform.position += dir * 3.5f * Time.deltaTime;
-                    playerTransform.rotation = Quaternion.Slerp(playerTransform.rotation, Quaternion.LookRotation(dir), Time.deltaTime * 5f);
-                }
-                // stuck
-                if (Vector3.Distance(playerTransform.position, lastPos) < 0.05f)
-                {
-                    stuckT += Time.deltaTime;
-                    if (stuckT > 2f)
-                    {
-                        playerTransform.position += Vector3.up * 0.2f + Random.insideUnitSphere * 0.3f;
-                        stuckT = 0f;
-                    }
-                }
-                else
-                {
-                    stuckT = 0f;
-                    lastPos = playerTransform.position;
-                }
-                timer += Time.deltaTime;
-                yield return null;
+                Quaternion lookRot = Quaternion.LookRotation(dir.normalized, Vector3.up);
+                playerTransform.rotation = Quaternion.Slerp(playerTransform.rotation, lookRot, Time.deltaTime * 5f);
             }
+            yield return null;
         }
-        yield return new WaitForSeconds(0.3f);
+        playerTransform.position = target;
+        yield return new WaitForSeconds(0.1f);
     }
 
     bool IsSpotFree(Vector3 pos, Vector3 size)
