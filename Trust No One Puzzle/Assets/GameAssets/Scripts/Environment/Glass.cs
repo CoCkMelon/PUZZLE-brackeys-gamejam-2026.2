@@ -1,48 +1,50 @@
 using UnityEngine;
+using UnityEngine.Events;
 
 public class Glass : MonoBehaviour
 {
     [Header("References")]
-    [SerializeField] private GameObject brokenWindow; // Assign your shattered prefab here
+    [SerializeField] private GameObject brokenWindow;
 
     [Header("Settings")]
-    [SerializeField] private float breakThreshold = 5f; // Minimum impact velocity to break
-    
-    [Tooltip("Only objects with this tag can break the glass. Leave empty to allow anything fast enough.")]
+    [SerializeField] private float breakThreshold = 5f;
     [SerializeField] private string requiredTag = "Hammer";
 
     [Header("Audio")]
-    [SerializeField] private AudioSource audioSource;
     [SerializeField] private AudioClip breakSound;
+
+    [Header("Events")]
+    public UnityEvent OnBroken;
+
+    private bool _isBroken;
 
     private void OnCollisionEnter(Collision collision)
     {
-        // Check tag if required
-        if (!string.IsNullOrEmpty(requiredTag) && !collision.gameObject.CompareTag(requiredTag))
-        {
-            return;
-        }
-
-        // Check if the object hit the glass hard enough
+        if (_isBroken) return;
+        if (!string.IsNullOrEmpty(requiredTag) && !collision.gameObject.CompareTag(requiredTag)) return;
         if (collision.relativeVelocity.magnitude >= breakThreshold)
         {
-            BreakGlass(collision.contacts[0].point);
+            BreakGlass(collision.contacts.Length > 0 ? collision.contacts[0].point : transform.position);
         }
     }
 
     public void BreakGlass(Vector3 impactPoint)
     {
-        if (audioSource != null && breakSound != null)
-        {
-            // Play detached so it isn't cut off when the original glass is destroyed
+        if (_isBroken) return;
+        _isBroken = true;
+
+        if (breakSound != null)
             AudioSource.PlayClipAtPoint(breakSound, transform.position);
-        }
 
-        brokenWindow.SetActive(true);
-        
-        // brokenWindow.GetComponent<ShatteredGlass>().ApplyExplosion(impactPoint);
+        if (brokenWindow != null)
+            brokenWindow.SetActive(true);
+        else
+            Debug.LogWarning($"[Glass] {name}: brokenWindow not assigned", this);
 
-        // Destroy the unbroken glass panel
+        OnBroken?.Invoke();
         Destroy(gameObject);
     }
+
+    // For hammer via PlayerCarry or direct call
+    public void BreakFromHammer() => BreakGlass(transform.position);
 }
