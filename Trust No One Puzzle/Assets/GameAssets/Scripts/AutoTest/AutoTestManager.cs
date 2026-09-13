@@ -5,9 +5,6 @@ using GameAssets.Scripts.Puzzle;
 
 /// <summary>
 /// Manages automated testing of the full game loop using NavMesh.
-/// Attach to empty GameObject in AutoTest scenes.
-/// Speeds up testing by automatically moving player and NPCs through puzzles.
-/// Copy of Game scene but with auto-test logic - does not edit original Game scene.
 /// </summary>
 public class AutoTestManager : MonoBehaviour
 {
@@ -19,8 +16,6 @@ public class AutoTestManager : MonoBehaviour
     [SerializeField] private bool autoSolvePuzzles = true;
 
     [Header("References")]
-    [SerializeField] private Transform playerStart;
-    [SerializeField] private Transform strangerStart;
     [SerializeField] private GameObject playerFPP;
     [SerializeField] private GameObject strangerNPC;
 
@@ -42,7 +37,7 @@ public class AutoTestManager : MonoBehaviour
 
         if (useNavMeshForPlayer)
         {
-            var player = playerFPP ?? GameObject.FindWithTag("Player") ?? FindFirstObjectByType<CharacterController>()?.gameObject;
+            var player = playerFPP != null ? playerFPP : (GameObject.FindWithTag("Player") ?? FindFirstObjectByType<CharacterController>()?.gameObject);
             if (player != null)
             {
                 var autoMover = player.GetComponent<AutoPlayerMover>();
@@ -55,7 +50,7 @@ public class AutoTestManager : MonoBehaviour
 
         if (autoMoveStranger)
         {
-            var stranger = strangerNPC ?? GameObject.Find("Stranger") ?? GameObject.FindWithTag("Stranger");
+            var stranger = strangerNPC != null ? strangerNPC : (GameObject.Find("Stranger") ?? GameObject.FindWithTag("Stranger"));
             if (stranger != null)
             {
                 var strangerMover = stranger.GetComponent<AutoStrangerMover>();

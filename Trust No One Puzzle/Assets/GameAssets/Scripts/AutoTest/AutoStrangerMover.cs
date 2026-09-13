@@ -3,8 +3,6 @@ using UnityEngine.AI;
 
 /// <summary>
 /// Automatically moves stranger/ghost NPC via NavMesh for testing.
-/// Attach to stranger/ghost GameObject. Requires NavMeshAgent.
-/// Implements the story tour where stranger moves through rooms and disappears.
 /// </summary>
 [RequireComponent(typeof(NavMeshAgent))]
 public class AutoStrangerMover : MonoBehaviour
@@ -21,7 +19,6 @@ public class AutoStrangerMover : MonoBehaviour
 
     [Header("Movement")]
     [SerializeField] private float walkSpeed = 1.5f;
-    [SerializeField] private float runSpeed = 3f;
 
     private NavMeshAgent _agent;
     private int _index;

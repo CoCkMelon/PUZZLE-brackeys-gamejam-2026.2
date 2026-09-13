@@ -1,12 +1,9 @@
 using UnityEngine;
 using UnityEngine.AI;
-using GameAssets.Scripts.Puzzle;
-using GameAssets.Scripts.Entities.Player;
 
 /// <summary>
 /// Automatically moves player via NavMeshAgent for testing puzzles.
 /// Attach to Player FPP or TPP. Requires NavMeshAgent.
-/// When enabled, takes control of player movement to speed up testing.
 /// </summary>
 [RequireComponent(typeof(NavMeshAgent))]
 public class AutoPlayerMover : MonoBehaviour
@@ -19,19 +16,11 @@ public class AutoPlayerMover : MonoBehaviour
     [SerializeField] private float waypointReachDistance = 0.5f;
     [SerializeField] private float waitAtWaypoint = 0.5f;
 
-    [Header("Manual Waypoints")]
+    [Header("Waypoints")]
     [SerializeField] private Transform[] waypoints;
-
-    [Header("Auto Puzzle - Room 1")]
     [SerializeField] private Transform mirrorKeyLocation;
     [SerializeField] private Transform cabinetLocation;
-    [SerializeField] private Transform bookLocation;
-    [SerializeField] private Transform candleLocation;
-    [SerializeField] private Transform vaseLocation;
     [SerializeField] private Transform placementTableLocation;
-    [SerializeField] private Transform drawerKeyLocation;
-
-    [Header("Auto Puzzle - Room 2")]
     [SerializeField] private Transform toolboxDrawerLocation;
     [SerializeField] private Transform toolboxLocation;
     [SerializeField] private Transform sofaHammerLocation;
@@ -46,16 +35,10 @@ public class AutoPlayerMover : MonoBehaviour
     private int _currentIndex;
     private float _waitTimer;
     private bool _isRunning;
-    private PlayerCarry _carry;
-    private FPPCameraController _fppCamera;
-    private enum Room1State { GoToKey, PickupKey, GoToCabinet, OpenCabinet, GoToObjects, PickupObjects, PlaceObjects, GoToNextKey, Done }
-    private Room1State _room1State;
 
     private void Awake()
     {
         _agent = GetComponent<NavMeshAgent>();
-        _carry = GetComponentInChildren<PlayerCarry>() ?? FindFirstObjectByType<PlayerCarry>();
-        _fppCamera = GetComponentInChildren<FPPCameraController>() ?? FindFirstObjectByType<FPPCameraController>();
         _agent.speed = useRun ? runSpeed : moveSpeed;
         _agent.angularSpeed = 360f;
         _agent.acceleration = 8f;
@@ -69,10 +52,9 @@ public class AutoPlayerMover : MonoBehaviour
         _isRunning = true;
         _currentIndex = 0;
         _waitTimer = 0f;
-        _room1State = Room1State.GoToKey;
-        if (mode == TestMode.ManualWaypoints && waypoints != null && waypoints.Length > 0)
+        if (mode == TestMode.ManualWaypoints && waypoints != null && waypoints.Length > 0 && waypoints[0] != null)
             _agent.SetDestination(waypoints[0].position);
-        else if (mode == TestMode.FullGameAuto)
+        else
             StartRoom1Auto();
     }
 
@@ -84,9 +66,7 @@ public class AutoPlayerMover : MonoBehaviour
         switch (mode)
         {
             case TestMode.ManualWaypoints: UpdateManualWaypoints(); break;
-            case TestMode.AutoPuzzleRoom1: UpdateRoom1Auto(); break;
-            case TestMode.AutoPuzzleRoom2: UpdateRoom2Auto(); break;
-            case TestMode.FullGameAuto: UpdateFullGameAuto(); break;
+            default: UpdateAutoPuzzle(); break;
         }
     }
 
@@ -102,27 +82,52 @@ public class AutoPlayerMover : MonoBehaviour
         }
     }
 
-    private void StartRoom1Auto() { _room1State = Room1State.GoToKey; if (mirrorKeyLocation != null) _agent.SetDestination(mirrorKeyLocation.position); }
-
-    private void UpdateRoom1Auto()
+    private void StartRoom1Auto()
     {
-        if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
-        switch (_room1State)
-        {
-            case Room1State.GoToKey:
-                if (Reached(mirrorKeyLocation)) { TryInteract(); _waitTimer = 1f; _room1State = Room1State.GoToCabinet; if (cabinetLocation != null) _agent.SetDestination(cabinetLocation.position); }
-                break;
-            case Room1State.GoToCabinet:
-                if (Reached(cabinetLocation)) { TryInteract(); _waitTimer = 1f; _room1State = Room1State.GoToObjects; if (bookLocation != null) _agent.SetDestination(bookLocation.position); }
-                break;
-            default: UpdateManualWaypoints(); break;
-        }
+        if (mirrorKeyLocation != null) _agent.SetDestination(mirrorKeyLocation.position);
+        else if (waypoints != null && waypoints.Length > 0 && waypoints[0] != null) _agent.SetDestination(waypoints[0].position);
     }
 
-    private void UpdateRoom2Auto() => UpdateManualWaypoints();
-    private void UpdateFullGameAuto() => UpdateRoom1Auto();
+    private void UpdateAutoPuzzle()
+    {
+        if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
+        if (!_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.5f)
+        {
+            _waitTimer = waitAtWaypoint;
+            // Cycle through assigned locations in order for full game auto
+            Transform next = null;
+            if (mode == TestMode.FullGameAuto || mode == TestMode.AutoPuzzleRoom1)
+            {
+                if (_currentIndex == 0) next = mirrorKeyLocation;
+                else if (_currentIndex == 1) next = cabinetLocation;
+                else if (_currentIndex == 2) next = placementTableLocation;
+                else if (_currentIndex == 3) next = toolboxDrawerLocation;
+                else if (_currentIndex == 4) next = toolboxLocation;
+                else if (_currentIndex == 5) next = sofaHammerLocation;
+                else if (_currentIndex == 6) next = windowLocation;
+            }
+            else if (mode == TestMode.AutoPuzzleRoom2)
+            {
+                if (_currentIndex == 0) next = toolboxDrawerLocation;
+                else if (_currentIndex == 1) next = toolboxLocation;
+                else if (_currentIndex == 2) next = sofaHammerLocation;
+                else if (_currentIndex == 3) next = windowLocation;
+            }
 
-    private bool Reached(Transform target) { if (target == null) return true; return !_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.5f; }
+            if (next == null && waypoints != null && waypoints.Length > 0)
+            {
+                _currentIndex = (_currentIndex + 1) % waypoints.Length;
+                next = waypoints[_currentIndex];
+            }
+            else
+            {
+                _currentIndex++;
+            }
+
+            if (next != null) _agent.SetDestination(next.position);
+            TryInteract();
+        }
+    }
 
     private void TryInteract()
     {
