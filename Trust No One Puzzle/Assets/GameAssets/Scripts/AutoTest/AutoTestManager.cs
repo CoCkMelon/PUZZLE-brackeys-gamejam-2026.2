@@ -27,6 +27,13 @@ public class AutoTestManager : MonoBehaviour
     [SerializeField] private bool skipWrongHints = true;
     [SerializeField] private float puzzleActionDelay = 1.5f;
     [SerializeField] private bool useFullSolver = true;
+    [Tooltip("Master cheat switch, forwarded to AutoGameSolver. Off = the run must find every key, place every item and break the glass for real.")]
+    [SerializeField] private bool allowCheats = false;
+    [SerializeField] private bool allowTeleportFallback = false;
+
+    [Header("Ids")]
+    [SerializeField] private string toolboxKeyId = "toolbox_key";
+    [SerializeField] private string hammerId = "hammer";
 
     [Header("Debug")]
     [SerializeField] private bool showDebugLogs = true;
@@ -90,6 +97,8 @@ public class AutoTestManager : MonoBehaviour
                 }
                 solver.autoStart = true;
                 solver.stepDelay = puzzleActionDelay;
+                solver.allowCheats = allowCheats;
+                solver.allowTeleportFallback = allowTeleportFallback;
                 solver.StartSolving();
                 Log("Started AutoGameSolver - will autonomously finish game");
             }
@@ -170,77 +179,46 @@ public class AutoTestManager : MonoBehaviour
     {
         if (skipWrongHints) Log("Auto-solve: Following mirror truth, skipping wrong hints");
 
-        if (KeyRing.Count == 0)
-        {
-            Log("No keys yet, searching for cabinet_key under table per mirror truth");
-            KeyRing.Add("cabinet_key");
-        }
-
+        // This fallback path used to grant cabinet_key / room2_key / toolbox_key / hammer straight
+        // into the KeyRing, so the "solved" run never touched a single object. It now only drives
+        // the real puzzle systems; anything that needs a key the player does not own is skipped.
         var slots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
         foreach (var slot in slots)
         {
             if (slot.IsCorrectlyFilled) continue;
-            Log($"Slot {slot.SlotId} needs {slot.RequiredItemId} - auto-place");
-
             var items = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
             foreach (var item in items)
             {
-                if (item.ItemId == slot.RequiredItemId)
-                {
-                    if (slot.TryPlace(item))
-                    {
-                        Log($"Auto-placed {item.ItemId} into {slot.SlotId} correctly");
-                    }
-                    break;
-                }
+                if (item.ItemId != slot.RequiredItemId) continue;
+                if (slot.TryPlace(item)) Log($"Auto-placed {item.ItemId} into {slot.SlotId} correctly");
+                break;
             }
         }
 
         var triggers = FindObjectsByType<DrawerUnlockTrigger>(FindObjectsSortMode.None);
         foreach (var t in triggers) t.Evaluate();
 
-        var drawerUnlocked = false;
-        foreach (var t in triggers) if (t.IsUnlocked && t.DrawerId == "room1_drawer") drawerUnlocked = true;
-        if (drawerUnlocked && !KeyRing.Has("room2_key"))
-        {
-            Log("Room1 drawer unlocked, collecting room2_key");
-            KeyRing.Add("room2_key");
-        }
-
-        if (KeyRing.Has("room2_key") && !KeyRing.Has("toolbox_key"))
-        {
-            Log("Searching for toolbox_key in drawer");
-            KeyRing.Add("toolbox_key");
-        }
-
-        if (KeyRing.Has("toolbox_key"))
+        if (KeyRing.Has(toolboxKeyId))
         {
             var toolbox = FindFirstObjectByType<ToolBoxInteractable>();
             if (toolbox != null)
             {
-                var field = typeof(ToolBoxInteractable).GetField("startsLocked", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (field != null) field.SetValue(toolbox, false);
-                Log("Toolbox unlocked, triggering light flicker");
+                toolbox.UnlockToolBox();
+                Log("Toolbox unlocked with the real key, triggering light flicker");
                 var flicker = FindFirstObjectByType<LightFlickerSystem>();
                 if (flicker != null) flicker.TriggerRoom2LightsOutSequence();
             }
         }
 
-        if (KeyRing.Has("toolbox_key") && !KeyRing.Has("hammer"))
-        {
-            Log("Searching for hammer behind sofa");
-            KeyRing.Add("hammer");
-        }
-
-        if (KeyRing.Has("hammer"))
+        var hammerHeld = KeyRing.Has(hammerId);
+        if (hammerHeld)
         {
             var glass = FindFirstObjectByType<Glass>();
             if (glass != null)
             {
-                Log("Hammer found, breaking window to escape - ending");
+                Log("Carrying the hammer - breaking the window to escape");
                 glass.BreakFromHammer();
                 CancelInvoke(nameof(AutoSolveStep));
-                Log("Game Completed via AutoTestManager!");
             }
         }
     }
@@ -267,7 +245,7 @@ public class AutoTestManager : MonoBehaviour
             foreach (var m in movers) m.StopAuto();
             if (solver != null) solver.StopSolving();
         }
-        if (GUILayout.Button("Force Solve All"))
+        if (allowCheats && GUILayout.Button("Force Solve All (CHEAT)"))
         {
             KeyRing.Add("cabinet_key");
             KeyRing.Add("room2_key");

@@ -32,12 +32,31 @@ public class GDDPuzzleBootstrap : MonoBehaviour
     [Header("Ending")]
     public float endingFadeDuration = 3f;
 
+    [Header("Ending - escape window authored in the scene")]
+    [Tooltip("Root of the wall panel that carries the window opening. Authored into the AutoTest scenes; built at runtime if absent.")]
+    public string escapeWindowRootName = "EscapeWindow_GDD";
+    public string breakableWindowName = "BreakableWindow_GDD";
+    public string brokenWindowName = "BrokenWindow_GDD";
+    public string escapeVolumeName = "EscapeVolume_GDD";
+    public string outsideViewName = "OutsideView_GDD";
+
+    [Tooltip("Room 2's far (-Z) wall face is the plane z = -16.81 (imported `Walls` mesh, world AABB x[-18.79,-8.96] y[0,3.92] z[-16.81,-4.93]). The panel sits flush against its inner face, right where the GDD puts the hammer behind the sofa.")]
+    public Vector3 escapeWallCentre = new Vector3(-14.185f, 1.96f, -16.51f);
+    public float escapeWallThickness = 0.4f;
+    public float escapePanelWidth = 3.2f;
+    public float escapeOpeningWidth = 1.4f;
+    public float escapeOpeningHeight = 1.2f;
+    public float escapeSillHeight = 0.9f;
+    public float escapeRoomHeight = 3.92f;
+
     [Header("Assembly")]
     public bool verboseAssembly = true;
     public bool createVisualMarkers = true;
 
     private bool room2SequenceStarted;
+    private float lastBlockedLog = -999f;
     private bool endingTriggered;
+    private Transform escapeVolume;
 
     void Awake()
     {
@@ -137,7 +156,9 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         var wpDrawer = CreateWaypoint("WP_ToolboxDrawer", drawer2 != null ? drawer2.transform.position + Vector3.forward * 1f : basePos + new Vector3(-2, 0, 0));
         var wpToolbox = CreateWaypoint("WP_Toolbox", toolbox != null ? toolbox.transform.position + Vector3.forward * 1f : basePos + new Vector3(0, 0, 2));
         var wpSofa = CreateWaypoint("WP_SofaHammer", sofa != null ? sofa.transform.position + Vector3.forward * 0.8f : (hammer != null ? hammer.transform.position + Vector3.back * 0.5f : basePos + new Vector3(-3, 0, 0)));
-        var wpWindow = CreateWaypoint("WP_Window", window != null ? window.transform.position + Vector3.back * 1.5f : basePos + new Vector3(5, 0, 0));
+        // The escape window faces +Z into Room 2, so the approach waypoint must be on the
+        // room side of the wall (previously this used Vector3.back and landed 1.5m outside the house).
+        var wpWindow = CreateWaypoint("WP_Window", window != null ? window.transform.position + Vector3.forward * 1.2f : basePos + new Vector3(5, 0, 0));
 
         SetField(mover, "mirrorKeyLocation", wpMirrorKey);
         SetField(mover, "cabinetLocation", wpCabinet);
@@ -803,11 +824,14 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         Vector3 hammerPos;
         if (sofa != null)
         {
-            hammerPos = sofa.transform.position + new Vector3(0.8f, 0.15f, -1.5f);
+            // Behind the sofa, but clear of the escape wall panel: the panel occupies
+            // x[-15.785,-12.585] z[-16.71,-16.31] y[0,3.92], so the old (0.8, 0.15, -1.5) offset
+            // buried the hammer in Wall_Pier_Right. This offset puts it beside the sofa instead.
+            hammerPos = sofa.transform.position + new Vector3(1.9f, 0.15f, -0.8f);
         }
         else
         {
-            hammerPos = new Vector3(-2, 0.2f, -2);
+            hammerPos = new Vector3(-12.2f, 0.2f, -16.0f);
         }
         // Ensure hammer not penetrating sofa or floor
         Vector3 hammerSize = hammerGo.transform.localScale;
@@ -1006,141 +1030,70 @@ public class GDDPuzzleBootstrap : MonoBehaviour
 
     void SetupEnding_GDD()
     {
-        Log("--- Ending GDD Assembly: window on wall with hole, glass material, fracture ---");
+        Log("--- Ending GDD Assembly: real window opening in Room 2's far wall ---");
 
-        // Try to find existing window or wall to place window on
-        var outerWall = GameObject.Find("Outer Wall 1") ?? GameObject.Find("Outer Wall 2") ?? GameObject.Find("Room Wall (1)") ?? GameObject.Find("Walls") ?? GameObject.Find("Room 2 walls");
-        var existingGlass = FindFirstObjectByType<Glass>();
-        GameObject windowGo = null;
-        Glass glass = null;
-
-        if (existingGlass != null)
+        var root = GameObject.Find(escapeWindowRootName);
+        if (root == null)
         {
-            windowGo = existingGlass.gameObject;
-            glass = existingGlass;
-            Log($"Found existing Glass {windowGo.name} at {windowGo.transform.position}");
+            Log($"{escapeWindowRootName} is not authored in this scene - building the wall + opening at runtime");
+            root = BuildEscapeWall();
+        }
+
+        var glass = root != null ? root.GetComponentInChildren<Glass>() : FindFirstObjectByType<Glass>();
+        if (glass == null)
+        {
+            Log("ERROR: no Glass component on the escape window - ending cannot be completed");
+            return;
+        }
+
+        if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
+        if (glass.GetComponent<Collider>() == null) glass.gameObject.AddComponent<BoxCollider>();
+        SetField(glass, "breakThreshold", 1.5f);
+        SetField(glass, "requiredTag", "Hammer");
+        SetField(glass, "useGlassMaterial", true);
+        SetField(glass, "spawnFractureOnBreak", true);
+        SetField(glass, "fracturePieces", 15);
+        SetField(glass, "fractureForce", 6f);
+
+        // Link the shattered-frame visual (4 colliderless bars -> the hole stays open)
+        var broken = root != null ? FindChildRecursive(root.transform, brokenWindowName) : null;
+        if (broken == null)
+        {
+            var foundByName = GameObject.Find(brokenWindowName);
+            if (foundByName != null) broken = foundByName.transform;
+        }
+        if (broken != null)
+        {
+            broken.gameObject.SetActive(false);
+            SetField(glass, "brokenWindow", broken.gameObject);
         }
         else
         {
-            // Find wall to attach window to - place window on outer wall with hole
-            Vector3 wallPos = Vector3.zero;
-            Vector3 wallScale = new Vector3(5, 3, 0.2f);
-            Quaternion wallRot = Quaternion.identity;
-            if (outerWall != null)
-            {
-                wallPos = outerWall.transform.position;
-                var rend = outerWall.GetComponent<Renderer>();
-                if (rend != null) wallScale = rend.bounds.size;
-                // Place window slightly in front of wall, at center of wall but at window height
-                // For outer wall, window should be at wall's position + forward offset
-                Vector3 forward = outerWall.transform.forward;
-                if (forward == Vector3.zero) forward = Vector3.forward;
-                // If wall is large, place window at reasonable height
-                windowGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                windowGo.name = "BreakableWindow_GDD";
-                // Position: on wall, at 1.2m height, centered
-                windowGo.transform.position = wallPos + forward * 0.15f + new Vector3(0, 1.2f, 0);
-                windowGo.transform.rotation = outerWall.transform.rotation;
-                windowGo.transform.localScale = new Vector3(1.5f, 1.5f, 0.08f);
-                Log($"Created window on wall {outerWall.name} at {windowGo.transform.position} (was middle of room before)");
-                
-                // Create hole in wall visual - create a frame around window to show hole
-                CreateWindowHoleInWall(outerWall, windowGo.transform.position, new Vector3(1.6f, 1.6f, 0.3f));
-            }
-            else
-            {
-                // Fallback: place on far wall at exit
-                windowGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                windowGo.name = "BreakableWindow_GDD";
-                windowGo.transform.position = new Vector3(4.5f, 1.2f, 0);
-                windowGo.transform.localScale = new Vector3(0.08f, 1.5f, 1.5f);
-                Log($"Created window at exit position {windowGo.transform.position} (no outer wall found)");
-            }
-
-            // Setup collider
-            var col = windowGo.GetComponent<BoxCollider>();
-            if (col != null) DestroyImmediate(col);
-            var boxCol = windowGo.AddComponent<BoxCollider>();
-            boxCol.isTrigger = false;
-            boxCol.size = Vector3.one;
-
-            // Add Glass component with fracture and glass material
-            glass = windowGo.AddComponent<Glass>();
-            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
-            SetField(glass, "breakThreshold", 1.5f);
-            SetField(glass, "requiredTag", "Hammer");
-            SetField(glass, "useGlassMaterial", true);
-            SetField(glass, "spawnFractureOnBreak", true);
-            SetField(glass, "fracturePieces", 15);
-            SetField(glass, "fractureForce", 6f);
-
-            // Create broken window that looks like frame with hole
-            var broken = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            broken.name = "BrokenWindow_GDD";
-            broken.transform.position = windowGo.transform.position;
-            broken.transform.rotation = windowGo.transform.rotation;
-            broken.transform.localScale = new Vector3(1.6f, 1.6f, 0.1f);
-            var mr = broken.GetComponent<Renderer>();
-            if (mr != null)
-            {
-                // Frame material - dark
-                mr.material.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
-            }
-            // Create hole visual - inner cube that is invisible to show hole
-            var hole = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            hole.name = "WindowHole";
-            hole.transform.SetParent(broken.transform);
-            hole.transform.localPosition = Vector3.zero;
-            hole.transform.localScale = new Vector3(0.85f, 0.85f, 1.1f);
-            var holeRend = hole.GetComponent<Renderer>();
-            if (holeRend != null)
-            {
-                holeRend.material.color = new Color(0, 0, 0, 0); // transparent hole
-                // Make it look like sky/outside
-                holeRend.material = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
-                holeRend.material.color = new Color(0.5f, 0.7f, 1f, 0.2f);
-            }
-            Destroy(hole.GetComponent<Collider>());
-
-            broken.SetActive(false);
-            SetField(glass, "brokenWindow", broken);
-            Log("Created BreakableWindow_GDD with glass material and brokenWindow with hole");
+            Debug.LogWarning($"[GDD] {brokenWindowName} missing - the window will shatter but show no broken frame", this);
         }
 
-        if (glass != null)
+        // "Outside" backing so looking through the pane reads as outdoors, not the imported wall behind it
+        var outside = root != null ? FindChildRecursive(root.transform, outsideViewName) : null;
+        if (outside != null)
         {
-            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
-            if (glass.GetComponent<Collider>() == null) glass.gameObject.AddComponent<BoxCollider>();
-            SetField(glass, "breakThreshold", 1.5f);
-            SetField(glass, "requiredTag", "Hammer");
-            SetField(glass, "useGlassMaterial", true);
-            SetField(glass, "spawnFractureOnBreak", true);
+            var or = outside.GetComponent<Renderer>();
+            if (or != null) or.material.color = new Color(0.45f, 0.65f, 0.95f);
+        }
 
-            var brokenField = typeof(Glass).GetField("brokenWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (brokenField != null && brokenField.GetValue(glass) == null)
-            {
-                var brokenGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                brokenGo.name = "BrokenWindow_Auto";
-                brokenGo.transform.position = glass.transform.position;
-                brokenGo.transform.rotation = glass.transform.rotation;
-                brokenGo.transform.localScale = new Vector3(1.6f, 1.6f, 0.1f);
-                var rend = brokenGo.GetComponent<Renderer>();
-                if (rend != null) rend.material.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
-                brokenGo.SetActive(false);
-                brokenField.SetValue(glass, brokenGo);
-            }
+        // Escape trigger sits in the opening; the player only reaches it once the glass is gone
+        escapeVolume = root != null ? FindChildRecursive(root.transform, escapeVolumeName) : null;
+        if (escapeVolume != null)
+        {
+            var col = escapeVolume.GetComponent<Collider>();
+            if (col != null) col.isTrigger = true;
+        }
+        else
+        {
+            Debug.LogWarning($"[GDD] {escapeVolumeName} missing - escape will still fire on glass break", this);
+        }
 
-            glass.OnBroken.RemoveAllListeners();
-            glass.OnBroken.AddListener(() =>
-            {
-                if (!endingTriggered)
-                {
-                    endingTriggered = true;
-                    StartCoroutine(EndingSequence());
-                    Log("Window broken! Fracture spawned, brokenWindow with hole activated, ending per GDD");
-                }
-            });
-            Log($"Ending window setup: {glass.name} at {glass.transform.position} on wall, glass material, fracture {GetField<int>(glass, "fracturePieces")} pieces, breakable with Hammer");
+        glass.OnBroken.RemoveAllListeners();
+        glass.OnBroken.AddListener(OnWindowBroken);
 
             // FIX: Ensure player starts at valid free NavMesh spot, not inside wall (fixes wall stare video)
             try
@@ -1176,67 +1129,153 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             }
             catch (System.Exception e) { Log($"Player warp fix exception: {e.Message}"); }
 
-        }
+        Log($"Ending window ready: {glass.name} at {glass.transform.position} in the wall plane, opening " +
+            $"{escapeOpeningWidth}x{escapeOpeningHeight}m, sill {escapeSillHeight}m, fracture " +
+            $"{GetField<int>(glass, "fracturePieces")} pieces, escape volume {(escapeVolume != null ? "present" : "MISSING")}");
     }
 
-    void CreateWindowHoleInWall(GameObject wall, Vector3 windowPos, Vector3 holeSize)
+    void OnWindowBroken()
     {
-        try
-        {
-            // Create a visual frame around window to indicate hole in wall
-            var frameParent = new GameObject("WindowFrame_GDD");
-            frameParent.transform.position = windowPos;
-            frameParent.transform.rotation = wall.transform.rotation;
-            
-            // Create 4 frame pieces
-            float thickness = 0.1f;
-            // Top
-            var top = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            top.name = "Frame_Top";
-            top.transform.SetParent(frameParent.transform);
-            top.transform.localPosition = new Vector3(0, holeSize.y/2 + thickness/2, 0);
-            top.transform.localScale = new Vector3(holeSize.x + thickness*2, thickness, holeSize.z);
-            // Bottom
-            var bottom = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            bottom.name = "Frame_Bottom";
-            bottom.transform.SetParent(frameParent.transform);
-            bottom.transform.localPosition = new Vector3(0, -holeSize.y/2 - thickness/2, 0);
-            bottom.transform.localScale = new Vector3(holeSize.x + thickness*2, thickness, holeSize.z);
-            // Left
-            var left = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            left.name = "Frame_Left";
-            left.transform.SetParent(frameParent.transform);
-            left.transform.localPosition = new Vector3(-holeSize.x/2 - thickness/2, 0, 0);
-            left.transform.localScale = new Vector3(thickness, holeSize.y, holeSize.z);
-            // Right
-            var right = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            right.name = "Frame_Right";
-            right.transform.SetParent(frameParent.transform);
-            right.transform.localPosition = new Vector3(holeSize.x/2 + thickness/2, 0, 0);
-            right.transform.localScale = new Vector3(thickness, holeSize.y, holeSize.z);
-
-            foreach (var f in new[] { top, bottom, left, right })
-            {
-                var rend = f.GetComponent<Renderer>();
-                if (rend != null) rend.material.color = new Color(0.4f, 0.25f, 0.1f); // wood frame
-                Destroy(f.GetComponent<Collider>());
-            }
-
-            // Create hole indicator - disable wall collider in window area if possible
-            var wallCol = wall.GetComponent<Collider>();
-            if (wallCol is BoxCollider boxCol)
-            {
-                // Can't easily create hole in collider, but we can make window collider trigger and wall not block
-                // For solvability, ensure player can go through window after break
-                Log($"Window frame created on wall {wall.name}, hole size {holeSize}");
-            }
-        }
-        catch (System.Exception ex)
-        {
-            Debug.LogWarning($"[GDD] Failed to create window hole: {ex.Message}");
-        }
+        if (endingTriggered) return;
+        endingTriggered = true;
+        StartCoroutine(EndingSequence());
+        Log("Window broken - fracture spawned, broken frame shown, hole is open, ending per GDD");
     }
 
+    /// <summary>
+    /// Alternate win condition: if the player physically walks through the opening once the
+    /// glass is gone, count that as the escape too - not just the OnBroken event.
+    /// </summary>
+    void Update()
+    {
+        if (endingTriggered || escapeVolume == null) return;
+        var player = GameObject.FindWithTag("Player");
+        if (player == null) return;
+        var col = escapeVolume.GetComponent<Collider>();
+        if (col == null) return;
+        if (!col.bounds.Contains(player.transform.position)) return;
+
+        var glass = FindFirstObjectByType<Glass>();
+        if (glass != null)
+        {
+            // The volume straddles the pane, so throttle this - the player will be standing at
+            // the window most of the time.
+            if (Time.time - lastBlockedLog > 2f)
+            {
+                lastBlockedLog = Time.time;
+                Log("Player is at the window but the glass is still intact - break it to escape");
+            }
+            return;
+        }
+
+        Log("Player stepped through the broken window - escaped");
+        endingTriggered = true;
+        StartCoroutine(EndingSequence());
+    }
+
+    static Transform FindChildRecursive(Transform parent, string name)
+    {
+        foreach (Transform c in parent)
+        {
+            if (c.name == name) return c;
+            var deep = FindChildRecursive(c, name);
+            if (deep != null) return deep;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Builds a wall panel with a genuine opening in it. The sill/header/piers are four
+    /// separate boxes, so the gap between them is a real hole you can see and walk at -
+    /// the previous version only drew a decorative frame over a solid wall.
+    /// </summary>
+    GameObject BuildEscapeWall()
+    {
+        var root = new GameObject(escapeWindowRootName);
+        root.transform.position = escapeWallCentre;
+
+        float headY = escapeSillHeight + escapeOpeningHeight;
+
+        GameObject WallPiece(string name, Vector3 localPos, Vector3 size)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = name;
+            go.transform.SetParent(root.transform, false);
+            go.transform.localPosition = localPos;
+            go.transform.localScale = size;
+            return go;
+        }
+
+        float cy = escapeSillHeight + escapeOpeningHeight * 0.5f - escapeWallCentre.y;
+        WallPiece("Wall_Sill", new Vector3(0, escapeSillHeight * 0.5f - escapeWallCentre.y, 0),
+                  new Vector3(escapePanelWidth, escapeSillHeight, escapeWallThickness));
+        WallPiece("Wall_Header", new Vector3(0, (headY + escapeRoomHeight) * 0.5f - escapeWallCentre.y, 0),
+                  new Vector3(escapePanelWidth, escapeRoomHeight - headY, escapeWallThickness));
+        float pierW = (escapePanelWidth - escapeOpeningWidth) * 0.5f;
+        WallPiece("Wall_Pier_Left", new Vector3(-(escapeOpeningWidth + pierW) * 0.5f, cy, 0),
+                  new Vector3(pierW, escapeOpeningHeight, escapeWallThickness));
+        WallPiece("Wall_Pier_Right", new Vector3((escapeOpeningWidth + pierW) * 0.5f, cy, 0),
+                  new Vector3(pierW, escapeOpeningHeight, escapeWallThickness));
+
+        // Frame around the opening
+        const float ft = 0.08f;
+        WallPiece("WindowFrame_Bottom", new Vector3(0, escapeSillHeight - escapeWallCentre.y, 0.02f),
+                  new Vector3(escapeOpeningWidth + ft * 2, ft, 0.24f));
+        WallPiece("WindowFrame_Top", new Vector3(0, headY - escapeWallCentre.y, 0.02f),
+                  new Vector3(escapeOpeningWidth + ft * 2, ft, 0.24f));
+        WallPiece("WindowFrame_Left", new Vector3(-(escapeOpeningWidth + ft) * 0.5f, cy, 0.02f),
+                  new Vector3(ft, escapeOpeningHeight + ft, 0.24f));
+        WallPiece("WindowFrame_Right", new Vector3((escapeOpeningWidth + ft) * 0.5f, cy, 0.02f),
+                  new Vector3(ft, escapeOpeningHeight + ft, 0.24f));
+
+        // Breakable pane filling the opening
+        var pane = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        pane.name = breakableWindowName;
+        pane.transform.SetParent(root.transform, false);
+        pane.transform.localPosition = new Vector3(0, cy, 0);
+        pane.transform.localScale = new Vector3(escapeOpeningWidth, escapeOpeningHeight, 0.04f);
+        pane.AddComponent<Glass>();
+
+        // Shattered frame shown after the break - deliberately colliderless so the hole stays open
+        var broken = new GameObject(brokenWindowName);
+        broken.transform.SetParent(root.transform, false);
+        broken.transform.localPosition = new Vector3(0, cy, 0.1f);
+        foreach (var side in new[] { "Top", "Bottom", "Left", "Right" })
+        {
+            var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            bar.name = "BrokenFrame_" + side;
+            bar.transform.SetParent(broken.transform, false);
+            bool horizontal = side == "Top" || side == "Bottom";
+            bar.transform.localScale = horizontal
+                ? new Vector3(escapeOpeningWidth + 0.1f, ft, 0.06f)
+                : new Vector3(ft, escapeOpeningHeight + ft, 0.06f);
+            float off = (escapeOpeningHeight + ft) * 0.5f;
+            bar.transform.localPosition = side == "Top" ? new Vector3(0, off, 0)
+                : side == "Bottom" ? new Vector3(0, -off, 0)
+                : new Vector3(side == "Left" ? -(escapeOpeningWidth + ft) * 0.5f : (escapeOpeningWidth + ft) * 0.5f, 0, 0);
+            Destroy(bar.GetComponent<Collider>());
+        }
+        broken.SetActive(false);
+
+        // Sky backing just in front of the imported wall behind the pane
+        var outside = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        outside.name = outsideViewName;
+        outside.transform.SetParent(root.transform, false);
+        outside.transform.localPosition = new Vector3(0, cy, -0.18f);
+        outside.transform.localScale = new Vector3(escapeOpeningWidth + 0.04f, escapeOpeningHeight + 0.04f, 0.02f);
+
+        // Escape trigger inside the opening
+        var vol = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        vol.name = escapeVolumeName;
+        vol.transform.SetParent(root.transform, false);
+        vol.transform.localPosition = new Vector3(0, cy, 0.06f);
+        vol.transform.localScale = new Vector3(escapeOpeningWidth - 0.04f, escapeOpeningHeight - 0.04f, 0.8f);
+        DestroyImmediate(vol.GetComponent<Renderer>());
+        vol.GetComponent<Collider>().isTrigger = true;
+
+        Log($"Built wall panel at {escapeWallCentre} with a real {escapeOpeningWidth}x{escapeOpeningHeight}m opening");
+        return root;
+    }
 
     #endregion
 

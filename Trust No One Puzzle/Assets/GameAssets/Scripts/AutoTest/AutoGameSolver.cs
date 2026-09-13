@@ -47,11 +47,18 @@ public class AutoGameSolver : MonoBehaviour
     public bool drivePlayerToTargets = true;
     public float driveWaitTimeout = 12f;
 
+    [Header("Fairness - keep these off for a legitimate run")]
+    [Tooltip("Master switch. When false the solver must find every key, place every item and break the glass for real.")]
+    public bool allowCheats = false;
+    [Tooltip("When true the walker may shove the player straight through geometry instead of pathing around it. Off by default - that is not a fair completion.")]
+    public bool allowTeleportFallback = false;
+
     [Header("Ids")]
     public string cabinetKeyId = "cabinet_key";
     public string room2KeyId = "room2_key";
     public string toolboxKeyId = "toolbox_key";
     public string hammerId = "hammer";
+    public string brokenWindowName = "BrokenWindow_GDD";
 
     private GameState currentState = GameState.Init;
     private Coroutine solverRoutine;
@@ -59,6 +66,14 @@ public class AutoGameSolver : MonoBehaviour
     private AutoPlayerMover mover;
     private Transform playerTransform;
     private bool glassBroken = false;
+    private bool glassEverExisted = false;
+    private bool hammerGenuinelyFound = false;
+    // Step results. Keys can be consumed by a lock on unlock, so we cannot re-check the
+    // KeyRing at the end - we record that each step genuinely succeeded instead.
+    private bool cabinetUnlockedWithKey = false;
+    private bool drawerUnlockedByPlacements = false;
+    private bool toolboxUnlockedWithKey = false;
+    private readonly List<string> cheatLog = new List<string>();
 
     void Start()
     {
@@ -163,6 +178,15 @@ public class AutoGameSolver : MonoBehaviour
     {
         CachePlayer();
         Log("AutoGameSolver: Starting full autonomous walkthrough - will drive player visibly");
+        Log($"Fairness: allowCheats={allowCheats} allowTeleportFallback={allowTeleportFallback}");
+        cheatLog.Clear();
+        hammerGenuinelyFound = false;
+        cabinetUnlockedWithKey = false;
+        drawerUnlockedByPlacements = false;
+        toolboxUnlockedWithKey = false;
+        // Record up front whether the level actually contains a breakable window, so a scene
+        // with no Glass can never be reported as "escaped".
+        glassEverExisted = FindFirstObjectByType<Glass>() != null;
         currentState = GameState.StoryIntro;
 
         yield return StoryIntro();
@@ -211,25 +235,46 @@ public class AutoGameSolver : MonoBehaviour
         else
         {
             currentState = GameState.Failed;
-            Log("AutoGameSolver: FAILED to complete - glass not broken or keys missing. Not raising completed.");
             string failKeys = string.Join(", ", KeyRing.CollectedKeys);
-            PuzzleEvents.RaiseHint(new HintMessage { text = $"AUTO SOLVER: Failed - glassBroken={glassBroken} keys={failKeys}", isMisleading = false, sourceId = "autosolver-failed" });
+            string cheats = cheatLog.Count > 0 ? " cheats used: " + string.Join("; ", cheatLog) : "";
+            Log($"AutoGameSolver: FAILED to complete - state={currentState} glassEverExisted={glassEverExisted} " +
+                $"glassBroken={glassBroken} hammer={hammerGenuinelyFound} keys=[{failKeys}].{cheats}");
+            PuzzleEvents.RaiseHint(new HintMessage { text = $"AUTO SOLVER: Failed - glassBroken={glassBroken} keys={failKeys}{cheats}", isMisleading = false, sourceId = "autosolver-failed" });
         }
     }
 
     bool VerifyCompletion()
     {
-        var glass = FindFirstObjectByType<Glass>();
-        bool broken = glass == null || glassBroken;
-        // Also check broken window active
-        var brokenWindow = GameObject.Find("BrokenWindow_GDD") ?? GameObject.Find("BrokenWindow_Auto");
-        if (brokenWindow != null && brokenWindow.activeSelf) broken = true;
+        // A scene with no Glass at all is NOT a completed game - that used to count as "broken".
+        bool hadGlass = glassEverExisted;
+        bool glassGone = glassEverExisted && FindFirstObjectByType<Glass>() == null;
+        var brokenWindow = GameObject.Find(brokenWindowName) ?? GameObject.Find("BrokenWindow_Auto");
+        bool brokenFrameShown = brokenWindow != null && brokenWindow.activeInHierarchy;
 
-        bool hasHammer = KeyRing.Has(hammerId) || KeyRing.Has("Hammer");
-        bool hasAllKeys = KeyRing.Has(cabinetKeyId) && KeyRing.Has(room2KeyId) && KeyRing.Has(toolboxKeyId);
+        bool slotsCorrect = AllTableSlotsCorrect();
 
-        Log($"VerifyCompletion: glass null? {glass==null} glassBroken flag={glassBroken} brokenWindow active={brokenWindow?.activeSelf} hasHammer={hasHammer} hasAllKeys={hasAllKeys}");
-        return broken && hasHammer;
+        bool completed = hadGlass && glassGone && brokenFrameShown
+                         && hammerGenuinelyFound && slotsCorrect
+                         && cabinetUnlockedWithKey && drawerUnlockedByPlacements && toolboxUnlockedWithKey;
+
+        Log($"VerifyCompletion: hadGlass={hadGlass} glassGone={glassGone} brokenFrameShown={brokenFrameShown} " +
+            $"hammerCarried={hammerGenuinelyFound} slotsCorrect={slotsCorrect} " +
+            $"cabinetUnlocked={cabinetUnlockedWithKey} drawerUnlocked={drawerUnlockedByPlacements} " +
+            $"toolboxUnlocked={toolboxUnlockedWithKey} cheatsUsed={cheatLog.Count} => {completed}");
+        return completed;
+    }
+
+    bool AllTableSlotsCorrect()
+    {
+        var slots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
+        bool any = false;
+        foreach (var s in slots)
+        {
+            if (s == null || !s.SlotId.StartsWith("table_")) continue;
+            any = true;
+            if (!s.IsCorrectlyFilled) return false;
+        }
+        return any;
     }
 
     IEnumerator StoryIntro()
@@ -521,7 +566,13 @@ public class AutoGameSolver : MonoBehaviour
         }
         else
         {
-            Log($"Key GameObject for {keyId} not found in scene, will add via KeyRing cheat but also spawn visual");
+            Log($"Key GameObject for {keyId} not found in scene - the level is missing it");
+            if (!allowCheats)
+            {
+                Log($"Refusing to fabricate {keyId}. Add the key object to the scene instead.");
+                yield break;
+            }
+            Log("[CHEAT] spawning a stand-in key so the run can continue");
             // Spawn visual key near player for visibility
             var player = playerTransform ?? (FindFirstObjectByType<CharacterController>()?.transform);
             Vector3 spawnPos = player != null ? player.position + player.forward * 0.5f + Vector3.up * 0.5f : Vector3.zero;
@@ -535,6 +586,9 @@ public class AutoGameSolver : MonoBehaviour
             var placeable = visualKey.AddComponent<PlaceableItem>();
             SetField(placeable, "itemId", keyId);
             SetField(placeable, "displayName", keyId);
+            var keyItem = visualKey.AddComponent<KeyItem>();
+            SetField(keyItem, "keyId", keyId);
+            SetField(keyItem, "collectOnPickup", true);
             var rb = visualKey.AddComponent<Rigidbody>();
             rb.mass = 0.2f;
             var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
@@ -547,23 +601,41 @@ public class AutoGameSolver : MonoBehaviour
             Destroy(visualKey, 2f);
         }
 
-        bool added = KeyRing.Add(keyId);
-        Log($"KeyRing.Add({keyId}) => {added}, now has {KeyRing.Count} keys. Reason: {reason} - VISUAL CARRY DONE");
+        if (KeyRing.Has(keyId))
+        {
+            Log($"KeyRing already holds {keyId} - collected for real");
+        }
+        else if (allowCheats)
+        {
+            KeyRing.Add(keyId);
+            cheatLog.Add($"injected {keyId}");
+            Log($"[CHEAT] KeyRing.Add({keyId}) - the key object was never collected");
+        }
+        else
+        {
+            Log($"NOT collected: {keyId} was never picked up, refusing to fake it. Reason: {reason}");
+        }
 
-        PuzzleEvents.RaiseHint(new HintMessage { text = $"Found {keyId} - {reason} [visibly carried]", isMisleading = false, sourceId = $"found-{keyId}" });
+        PuzzleEvents.RaiseHint(new HintMessage { text = KeyRing.Has(keyId) ? $"Found {keyId} - {reason} [visibly carried]" : $"Could not find {keyId} - {reason}", isMisleading = false, sourceId = $"found-{keyId}" });
         yield return WaitAndClosePhone(stepDelay);
     }
 
     IEnumerator OpenFurnitureWithKey(string keyId, string furnitureName, string logName, GameObject targetGo = null)
     {
         Log($"Opening {logName} with key {keyId}");
-        KeyRing.Add(keyId);
+        if (!KeyRing.Has(keyId))
+        {
+            Log($"Cannot open {logName}: {keyId} is not in the key ring. Not faking it.");
+            yield break;
+        }
 
         if (targetGo != null)
         {
             yield return DrivePlayerTo(targetGo.transform.position, $"open {logName}");
         }
 
+        // Match on the key the furniture actually demands. The old fallback also accepted any
+        // object whose name merely contained "Cabin", which unlocked the wrong piece of furniture.
         var furnitures = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
         OpenableFurniture target = null;
         foreach (var f in furnitures)
@@ -574,11 +646,6 @@ public class AutoGameSolver : MonoBehaviour
             {
                 target = f;
                 break;
-            }
-            if (f.name.Contains(furnitureName) || f.name.Contains("Cabin") || f.name.Contains("Cabinet"))
-            {
-                if (f.IsLocked) { target = f; break; }
-                if (target == null) target = f;
             }
         }
 
@@ -598,15 +665,24 @@ public class AutoGameSolver : MonoBehaviour
             yield return new WaitForSecondsRealtime(0.5f);
             target.Open();
             Log($"Opened {target.name} locked={target.IsLocked} open={target.IsOpen}");
+            if (!target.IsLocked && target.IsOpen) cabinetUnlockedWithKey = true;
             PuzzleEvents.RaiseDrawerUnlocked("cabinet_open");
             // Verify opened
             if (target.IsLocked)
             {
-                Log($"WARNING: {target.name} still locked after Unlock()! Forcing unlock via reflection");
-                SetField(target, "_isLocked", false);
-                SetField(target, "startsLocked", false);
-                target.Unlock();
-                target.Open();
+                if (allowCheats)
+                {
+                    cheatLog.Add($"forced {target.name} open");
+                    Log($"[CHEAT] {target.name} still locked after Unlock() - forcing via reflection");
+                    SetField(target, "_isLocked", false);
+                    SetField(target, "startsLocked", false);
+                    target.Unlock();
+                    target.Open();
+                }
+                else
+                {
+                    Log($"{target.name} is still locked after Unlock() with {keyId} - the lock logic rejected the key. Reporting failure instead of forcing it.");
+                }
             }
         }
         else
@@ -676,7 +752,7 @@ public class AutoGameSolver : MonoBehaviour
                 var item = FindPlaceable(neededId);
                 if (item != null)
                 {
-                    Log($"Force placing {neededId} into {slot.SlotId} via direct TryPlace");
+                    Log($"Placing {neededId} into {slot.SlotId} via direct TryPlace");
                     slot.TryPlace(item);
                 }
             }
@@ -691,8 +767,18 @@ public class AutoGameSolver : MonoBehaviour
                 t.Evaluate();
                 if (!t.IsUnlocked)
                 {
-                    Log("Force unlocking room1_drawer");
-                    t.ForceUnlock();
+                    // ForceUnlock used to run unconditionally, so the drawer opened even when the
+                    // mirror placements were wrong. Now it only happens in cheat mode.
+                    if (allowCheats)
+                    {
+                        cheatLog.Add("force-unlocked room1_drawer");
+                        Log("[CHEAT] Force unlocking room1_drawer despite incorrect placements");
+                        t.ForceUnlock();
+                    }
+                    else
+                    {
+                        Log("room1_drawer stayed locked - the table placements are not all correct. Reporting failure instead of forcing it.");
+                    }
                 }
             }
         }
@@ -763,8 +849,25 @@ public class AutoGameSolver : MonoBehaviour
             var openable = drawerGo.GetComponent<OpenableFurniture>();
             if (openable != null)
             {
-                if (openable.IsLocked) openable.Unlock();
+                if (openable.IsLocked)
+                {
+                    // Unlocking here used to be unconditional, which opened the drawer even when the
+                    // mirror placements were wrong. Only cheat mode may force it.
+                    if (allowCheats)
+                    {
+                        cheatLog.Add("force-opened the room1 drawer");
+                        Log("[CHEAT] room1 drawer still locked - forcing it open");
+                        openable.Unlock();
+                    }
+                    else
+                    {
+                        Log("room1 drawer is still locked: the table placements did not satisfy the trigger. Not forcing it.");
+                        yield return WaitAndClosePhone(stepDelay);
+                        yield break;
+                    }
+                }
                 openable.Open();
+                if (openable.IsOpen) drawerUnlockedByPlacements = true;
             }
         }
 
@@ -774,7 +877,11 @@ public class AutoGameSolver : MonoBehaviour
     IEnumerator OpenToolbox()
     {
         Log("Room2: Opening toolbox with toolbox_key");
-        KeyRing.Add(toolboxKeyId);
+        if (!KeyRing.Has(toolboxKeyId))
+        {
+            Log($"Cannot open the toolbox: {toolboxKeyId} is not in the key ring. Not faking it.");
+            yield break;
+        }
 
         var toolboxGo = GameObject.Find("tool Box") ?? GameObject.Find("Tool Box");
         ToolBoxInteractable toolbox = null;
@@ -787,18 +894,35 @@ public class AutoGameSolver : MonoBehaviour
 
             var locked = GetField<bool>(toolbox, "startsLocked");
             Log($"Toolbox {toolbox.name} locked={locked}, required={GetField<string>(toolbox, "requiredKeyId")}");
-            toolbox.UnlockToolBox();
+
+            // TryUnlockWithKey validates (and optionally consumes) the real key. UnlockToolBox
+            // just flips the flag, so it is only acceptable in cheat mode.
+            bool unlockedByKey = toolbox.TryUnlockWithKey();
+            Log($"TryUnlockWithKey => {unlockedByKey}, IsLocked={toolbox.IsLocked}");
+            if (unlockedByKey) toolboxUnlockedWithKey = true;
+            if (!unlockedByKey && toolbox.IsLocked)
+            {
+                if (allowCheats)
+                {
+                    cheatLog.Add("toolbox unlocked without a valid key");
+                    Log("[CHEAT] forcing the toolbox open via UnlockToolBox()");
+                    toolbox.UnlockToolBox();
+                }
+                else
+                {
+                    Log($"The toolbox rejected {toolboxKeyId}. Not forcing it.");
+                    yield return WaitAndClosePhone(stepDelay);
+                    yield break;
+                }
+            }
+
             var openable = toolbox.GetComponent<OpenableFurniture>();
             if (openable != null)
             {
                 openable.Unlock();
                 openable.Open();
             }
-
-            if (toolbox.OnUnlocked == null) toolbox.OnUnlocked = new UnityEngine.Events.UnityEvent();
-            if (toolbox.OnOpened == null) toolbox.OnOpened = new UnityEngine.Events.UnityEvent();
-            toolbox.OnUnlocked?.Invoke();
-            toolbox.OnOpened?.Invoke();
+            toolbox.Open();
         }
         else
         {
@@ -857,18 +981,48 @@ public class AutoGameSolver : MonoBehaviour
         {
             yield return DrivePlayerTo(hammerGo.transform.position, $"pick hammer {hammerGo.name}");
             var placeable = hammerGo.GetComponent<PlaceableItem>();
-            if (placeable != null && PlayerCarry.Instance != null)
+            var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
+            if (placeable != null && carry != null)
             {
-                PlayerCarry.Instance.TryPickUp(placeable);
+                var rb = hammerGo.GetComponent<Rigidbody>();
+                if (rb != null) rb.isKinematic = false;
+                bool picked = carry.TryPickUp(placeable);
                 yield return new WaitForSecondsRealtime(0.3f);
+                Log($"TryPickUp hammer => {picked}, IsCarrying={carry.IsCarrying}, IsHeld={placeable.IsHeld}");
             }
-            KeyRing.Add(hammerId);
-            Log($"Found hammer {hammerGo.name} at {hammerGo.transform.position}, collected");
-            PuzzleEvents.RaiseHint(new HintMessage { text = "Found hammer behind sofa!", isMisleading = false, sourceId = "hammer_found" });
+
+            // The hammer counts as found only when the player is actually holding it.
+            bool inHand = placeable != null && placeable.IsHeld;
+            if (inHand)
+            {
+                hammerGenuinelyFound = true;
+                KeyRing.Add(hammerId);
+                Log($"Hammer {hammerGo.name} picked up at {hammerGo.transform.position} and in hand");
+            }
+            else if (allowCheats)
+            {
+                hammerGenuinelyFound = true;
+                KeyRing.Add(hammerId);
+                cheatLog.Add("hammer granted without being carried");
+                Log("[CHEAT] hammer was never carried, granting it anyway");
+            }
+            else
+            {
+                Log($"Hammer {hammerGo.name} found but not carried - not granting {hammerId}");
+            }
+
+            if (hammerGenuinelyFound)
+                PuzzleEvents.RaiseHint(new HintMessage { text = "Found hammer behind sofa!", isMisleading = false, sourceId = "hammer_found" });
         }
         else
         {
-            Log("Hammer not found, creating one");
+            if (!allowCheats)
+            {
+                Log("Hammer not found in the scene and cheats are off - the level is missing it");
+                yield return WaitAndClosePhone(stepDelay);
+                yield break;
+            }
+            Log("[CHEAT] Hammer not found, creating one");
             var newHammer = GameObject.CreatePrimitive(PrimitiveType.Cube);
             newHammer.name = "Hammer_Auto";
             newHammer.tag = "Hammer";
@@ -915,8 +1069,29 @@ public class AutoGameSolver : MonoBehaviour
 
     IEnumerator BreakWindow()
     {
-        Log("Breaking window with hammer to escape");
-        KeyRing.Add(hammerId);
+        Log("Breaking the window with the hammer to escape");
+
+        var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
+        PlaceableItem held = carry != null ? carry.HeldItem : null;
+
+        // The pane only breaks for a Hammer-tagged object, so make sure the thing we are
+        // actually holding is tagged - but never grant the hammer we do not have.
+        if (held != null && !held.gameObject.CompareTag("Hammer"))
+        {
+            try { held.gameObject.tag = "Hammer"; } catch { }
+        }
+        bool holdingHammer = held != null && held.gameObject.CompareTag("Hammer");
+
+        if (!holdingHammer && !allowCheats)
+        {
+            Log($"Not carrying a Hammer-tagged item (held={held?.name ?? "nothing"}). Cannot break the window honestly.");
+            yield break;
+        }
+        if (!holdingHammer)
+        {
+            cheatLog.Add("window broken without holding the hammer");
+            Log("[CHEAT] breaking the window without holding the hammer");
+        }
 
         var glass = FindFirstObjectByType<Glass>();
         if (glass == null)
@@ -925,70 +1100,45 @@ public class AutoGameSolver : MonoBehaviour
             if (winGo != null) glass = winGo.GetComponent<Glass>();
         }
 
-        if (glass != null)
+        if (glass == null)
         {
-            yield return DrivePlayerTo(glass.transform.position + Vector3.back * 1f, "break window");
-            Log($"Found glass {glass.name}, breaking via BreakFromHammer()");
-            // Ensure hammer tag exists on held item or player
-            if (playerTransform != null)
-            {
-                var held = PlayerCarry.Instance?.HeldItem;
-                if (held != null && !held.gameObject.CompareTag("Hammer"))
-                {
-                    try { held.gameObject.tag = "Hammer"; } catch { }
-                }
-            }
-            glass.BreakFromHammer();
+            // Used to fabricate a window out of thin air and smash it, which always "passed".
+            Log("No Glass in the scene - there is no window to break. Failing instead of inventing one.");
+            yield break;
+        }
+
+        glassEverExisted = true;
+        yield return DrivePlayerTo(glass.transform.position + Vector3.forward * 1.1f, "stand in front of the window");
+        Log($"Found glass {glass.name} at {glass.transform.position}, breaking via BreakFromHammer()");
+
+        glass.BreakFromHammer();
+        yield return new WaitForSecondsRealtime(0.6f);
+
+        if (FindFirstObjectByType<Glass>() == null)
+        {
             glassBroken = true;
-            // Wait for OnBroken event to fire
-            yield return new WaitForSecondsRealtime(0.5f);
-            // Verify broken
-            if (FindFirstObjectByType<Glass>() == null)
+            Log("Glass destroyed by the break - verified broken");
+        }
+        else if (allowCheats)
+        {
+            var g = FindFirstObjectByType<Glass>();
+            cheatLog.Add("glass force-destroyed");
+            Log("[CHEAT] glass survived BreakFromHammer - force destroying it");
+            if (g != null)
             {
-                Log("Glass destroyed - verified broken");
-                glassBroken = true;
+                if (g.OnBroken == null) g.OnBroken = new UnityEngine.Events.UnityEvent();
+                g.OnBroken.Invoke();
+                Destroy(g.gameObject);
             }
-            else
-            {
-                Log("Glass still exists after BreakFromHammer, forcing destroy");
-                var g = FindFirstObjectByType<Glass>();
-                if (g != null)
-                {
-                    if (g.OnBroken == null) g.OnBroken = new UnityEngine.Events.UnityEvent();
-                    g.OnBroken.Invoke();
-                    Destroy(g.gameObject);
-                    glassBroken = true;
-                }
-            }
+            glassBroken = true;
         }
         else
         {
-            Log("Glass not found, searching for window to create and break");
-            var winGo = GameObject.Find("BreakableWindow_GDD");
-            if (winGo == null)
-            {
-                winGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                winGo.name = "BreakableWindow_GDD";
-                winGo.transform.position = new Vector3(5, 1, 0);
-                winGo.transform.localScale = new Vector3(0.1f, 2, 2);
-                var g = winGo.AddComponent<Glass>();
-                if (g.OnBroken == null) g.OnBroken = new UnityEngine.Events.UnityEvent();
-                var broken = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                broken.name = "BrokenWindow_GDD";
-                broken.transform.position = winGo.transform.position;
-                broken.transform.localScale = new Vector3(0.1f, 2, 2);
-                broken.SetActive(false);
-                SetField(g, "brokenWindow", broken);
-                glass = g;
-            }
-            if (glass != null)
-            {
-                glass.BreakFromHammer();
-                glassBroken = true;
-            }
+            Log("Glass survived BreakFromHammer - the impact did not clear breakThreshold. Reporting failure.");
         }
 
-        PuzzleEvents.RaiseHint(new HintMessage { text = "Window broken! Escaping...", isMisleading = false, sourceId = "window_broken" });
+        if (glassBroken)
+            PuzzleEvents.RaiseHint(new HintMessage { text = "Window broken! Escaping...", isMisleading = false, sourceId = "window_broken" });
         yield return WaitAndClosePhone(stepDelay);
     }
 
@@ -1069,9 +1219,10 @@ public class AutoGameSolver : MonoBehaviour
         string onGuiKeys = string.Join(", ", KeyRing.CollectedKeys);
         GUILayout.Label($"Keys: {onGuiKeys}");
         GUILayout.Label($"Player: {playerPos} Agent on NavMesh: {agentNav}");
+        GUILayout.Label($"Cheats: {(allowCheats ? "ON" : "off")}  Teleport: {(allowTeleportFallback ? "ON" : "off")}  Cheats used: {cheatLog.Count}");
         if (GUILayout.Button("Start Full Auto Solve")) StartSolving();
         if (GUILayout.Button("Stop")) StopSolving();
-        if (GUILayout.Button("Force Complete -> Break Window"))
+        if (allowCheats && GUILayout.Button("Force Complete -> Break Window"))
         {
             var g = FindFirstObjectByType<Glass>();
             if (g != null) { g.BreakFromHammer(); glassBroken = true; }
