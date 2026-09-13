@@ -186,6 +186,33 @@ public class GDDPuzzleBootstrap : MonoBehaviour
                 carry = player.AddComponent<PlayerCarry>();
             }
         }
+
+        // FIX: Ensure MobilePhoneController doesn't disable AutoPlayerMover / NavMeshAgent / PlayerCarry
+        // This was causing phone to stay open and player to freeze after reaching cabinet
+        var phone = FindFirstObjectByType<GameAssets.Scripts.UI.Mobile.MobilePhoneController>();
+        if (phone != null)
+        {
+            var field = typeof(GameAssets.Scripts.UI.Mobile.MobilePhoneController).GetField("disableWhileOpen", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (field != null)
+            {
+                var arr = field.GetValue(phone) as Behaviour[];
+                if (arr != null)
+                {
+                    var filtered = new List<Behaviour>();
+                    foreach (var b in arr)
+                    {
+                        if (b == null) continue;
+                        // Never disable auto-movement components
+                        if (b is AutoPlayerMover) continue;
+                        if (b is NavMeshAgent) continue;
+                        if (b is PlayerCarry) continue;
+                        filtered.Add(b);
+                    }
+                    field.SetValue(phone, filtered.ToArray());
+                    Debug.Log($"[GDD] Filtered MobilePhone disableWhileOpen: removed AutoPlayerMover/NavMeshAgent, now {filtered.Count} behaviours");
+                }
+            }
+        }
     }
 
     void SetupWrongHintSystem()
@@ -305,6 +332,7 @@ public class GDDPuzzleBootstrap : MonoBehaviour
                 SetField(openable, "startsLocked", true);
                 SetField(openable, "requiredKeyId", cabinetKeyId);
                 SetField(openable, "unlockWithKey", true);
+                if (openable.OnUnlocked == null) openable.OnUnlocked = new UnityEngine.Events.UnityEvent();
                 openable.OnUnlocked.AddListener(() =>
                 {
                     PuzzleEvents.RaiseDrawerUnlocked("cabinet_open");
@@ -318,16 +346,28 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         {
             var openable = drawerGo.GetComponent<OpenableFurniture>();
             if (openable == null) openable = drawerGo.AddComponent<OpenableFurniture>();
+            if (openable.OnUnlocked == null) openable.OnUnlocked = new UnityEngine.Events.UnityEvent();
+            if (openable.OnOpened == null) openable.OnOpened = new UnityEngine.Events.UnityEvent();
             SetField(openable, "startsLocked", true);
             SetField(openable, "unlockWithKey", false);
 
             var triggerGo = new GameObject("DrawerUnlock_Room1_GDD");
             var trigger = triggerGo.AddComponent<DrawerUnlockTrigger>();
+            if (trigger.OnUnlocked == null) trigger.OnUnlocked = new UnityEngine.Events.UnityEvent();
+            if (trigger.OnRelocked == null) trigger.OnRelocked = new UnityEngine.Events.UnityEvent();
             SetField(trigger, "drawerId", "room1_drawer");
             SetField(trigger, "condition", DrawerUnlockTrigger.Condition.AllSlotsCorrect);
             var slots = new List<PlacementSlot>(FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None));
             var tableSlots = new List<PlacementSlot>();
-            foreach (var s in slots) if (s.SlotId.StartsWith("table_")) tableSlots.Add(s);
+            foreach (var s in slots)
+            {
+                if (s == null) continue;
+                try
+                {
+                    if (!string.IsNullOrEmpty(s.SlotId) && s.SlotId.StartsWith("table_")) tableSlots.Add(s);
+                }
+                catch { }
+            }
             SetField(trigger, "requiredSlots", tableSlots);
             SetField(trigger, "drawers", new List<OpenableFurniture> { openable });
             SetField(trigger, "unlockOnce", true);
@@ -353,6 +393,10 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         {
             var toolbox = toolboxGo.GetComponent<ToolBoxInteractable>();
             if (toolbox == null) toolbox = toolboxGo.AddComponent<ToolBoxInteractable>();
+            if (toolbox.OnUnlocked == null) toolbox.OnUnlocked = new UnityEngine.Events.UnityEvent();
+            if (toolbox.OnOpened == null) toolbox.OnOpened = new UnityEngine.Events.UnityEvent();
+            if (toolbox.OnClosed == null) toolbox.OnClosed = new UnityEngine.Events.UnityEvent();
+            if (toolbox.OnLockedAttempt == null) toolbox.OnLockedAttempt = new UnityEngine.Events.UnityEvent();
             SetField(toolbox, "startsLocked", true);
             SetField(toolbox, "requiredKeyId", toolboxKeyId);
             SetField(toolbox, "unlockWithKey", true);
@@ -382,10 +426,17 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         {
             var flickerGo = new GameObject("LightFlicker_GDD");
             flicker = flickerGo.AddComponent<LightFlickerSystem>();
+            if (flicker.OnLightsWentOut == null) flicker.OnLightsWentOut = new UnityEngine.Events.UnityEvent();
+            if (flicker.OnLightsCameBackOn == null) flicker.OnLightsCameBackOn = new UnityEngine.Events.UnityEvent();
             var allLights = FindObjectsByType<Light>(FindObjectsSortMode.None);
             foreach (var l in allLights) if (l.type != LightType.Directional) flicker.targetLights.Add(l);
             SetField(flicker, "lightsOutDuration", lightOutDuration);
             SetField(flicker, "triggerOnStart", false);
+        }
+        else
+        {
+            if (flicker.OnLightsWentOut == null) flicker.OnLightsWentOut = new UnityEngine.Events.UnityEvent();
+            if (flicker.OnLightsCameBackOn == null) flicker.OnLightsCameBackOn = new UnityEngine.Events.UnityEvent();
         }
 
         flicker.OnLightsWentOut.AddListener(() =>
@@ -462,6 +513,7 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             winGo.transform.position = new Vector3(5, 1, 0);
             winGo.transform.localScale = new Vector3(0.1f, 2, 2);
             glass = winGo.AddComponent<Glass>();
+            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
             var broken = GameObject.CreatePrimitive(PrimitiveType.Cube);
             broken.name = "BrokenWindow_GDD";
             broken.transform.position = winGo.transform.position;
@@ -472,6 +524,10 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             SetField(glass, "brokenWindow", broken);
             SetField(glass, "breakThreshold", 2f);
             SetField(glass, "requiredTag", "Hammer");
+        }
+        else
+        {
+            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
         }
 
         var brokenField = typeof(Glass).GetField("brokenWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);

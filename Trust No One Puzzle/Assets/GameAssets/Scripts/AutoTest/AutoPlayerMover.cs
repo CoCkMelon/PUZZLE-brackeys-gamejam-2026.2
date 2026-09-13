@@ -155,11 +155,34 @@ public class AutoPlayerMover : MonoBehaviour
         _hasFallbackTarget = false;
     }
 
+    private float _phoneOpenTimer = 0f;
+
     private void Update()
     {
         if (!_isRunning) return;
         if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
         if (_actionTimer > 0) { _actionTimer -= Time.deltaTime; }
+
+        // FIX: Auto-close phone if it's been open too long (phone never closes bug)
+        try
+        {
+            var phone = GameAssets.Scripts.UI.Mobile.MobilePhoneController.Instance;
+            if (phone != null && phone.IsOpen)
+            {
+                _phoneOpenTimer += Time.deltaTime;
+                if (_phoneOpenTimer > 2.5f)
+                {
+                    phone.SetOpen(false);
+                    _phoneOpenTimer = 0f;
+                    Debug.Log("[AutoPlayerMover] Auto-closed phone that was open too long");
+                }
+            }
+            else
+            {
+                _phoneOpenTimer = 0f;
+            }
+        }
+        catch { }
 
         if (_agent != null && !_agent.isOnNavMesh)
         {
@@ -199,6 +222,20 @@ public class AutoPlayerMover : MonoBehaviour
             _waitTimer = waitAtWaypoint;
             SetNextPuzzleDestination();
         }
+    }
+
+    // Public API for AutoGameSolver to drive player to specific position
+    public void GoToPosition(Vector3 pos)
+    {
+        _fallbackTarget = pos;
+        _hasFallbackTarget = true;
+        if (_agent != null && _agent.isOnNavMesh)
+        {
+            if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas))
+                pos = hit.position;
+            _agent.SetDestination(pos);
+        }
+        _isRunning = true;
     }
 
     void UpdateFallbackMove()

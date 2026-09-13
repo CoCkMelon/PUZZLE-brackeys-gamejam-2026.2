@@ -38,6 +38,12 @@ namespace GameAssets.Scripts.UI.Mobile
         [SerializeField] private float soundVolume = 0.8f;
         [SerializeField] private bool playSoundEvenWhenOpen = false;
 
+        [Header("Auto-Close FIX - phone never closes bug")]
+        [SerializeField] private bool autoCloseAfterHint = true;
+        [SerializeField] private float autoCloseDelay = 2.5f;
+        [Tooltip("If true, phone will NOT disable AutoPlayerMover/NavMeshAgent/PlayerCarry - fixes freeze after cabinet")]
+        [SerializeField] private bool neverDisableAutoMover = true;
+
         private UIDocument _doc;
         private VisualElement _root;
         private ScrollView _scroll;
@@ -246,8 +252,15 @@ namespace GameAssets.Scripts.UI.Mobile
             {
                 foreach (var behaviour in disableWhileOpen)
                 {
-                    if (behaviour != null)
-                        behaviour.enabled = enabled;
+                    if (behaviour == null) continue;
+                    // FIX: never disable auto-movement components, otherwise player freezes after reaching cabinet
+                    if (neverDisableAutoMover)
+                    {
+                        var typeName = behaviour.GetType().Name;
+                        if (typeName.Contains("AutoPlayerMover") || typeName.Contains("AutoStrangerMover") || typeName.Contains("NavMeshAgent") || typeName.Contains("PlayerCarry") || typeName.Contains("NavMeshAutoBaker"))
+                            continue;
+                    }
+                    behaviour.enabled = enabled;
                 }
             }
 
@@ -269,10 +282,29 @@ namespace GameAssets.Scripts.UI.Mobile
         {
             Debug.Log($"[MobilePhone] OnHint received: {hint.text}");
             AddMessage(hint);
-            if (autoOpenOnHint || (autoOpenOnWrongHint && hint.isMisleading))
+            bool shouldOpen = autoOpenOnHint || (autoOpenOnWrongHint && hint.isMisleading);
+            // Don't auto-open for autosolver-complete message to avoid spam, but still log
+            if (hint.sourceId == "autosolver-complete") shouldOpen = false;
+
+            if (shouldOpen)
             {
                 SetOpen(true);
                 Debug.Log("[MobilePhone] Auto-opened phone due to hint");
+
+                if (autoCloseAfterHint)
+                {
+                    CancelInvoke(nameof(AutoClosePhone));
+                    Invoke(nameof(AutoClosePhone), autoCloseDelay);
+                }
+            }
+        }
+
+        void AutoClosePhone()
+        {
+            if (_open)
+            {
+                Debug.Log("[MobilePhone] Auto-closing phone after delay (fix never closes bug)");
+                SetOpen(false);
             }
         }
 
