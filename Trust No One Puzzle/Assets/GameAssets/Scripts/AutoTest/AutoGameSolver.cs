@@ -234,46 +234,66 @@ public class AutoGameSolver : MonoBehaviour
 
     IEnumerator StoryIntro()
     {
-        Log("Story: Real estate viewing, stranger arrives, tour, objects disappearing");
-        PuzzleEvents.RaiseHint(new HintMessage { text = "Agent: Sending colleague for house viewing.", isMisleading = false, sourceId = "story01" });
-        yield return WaitAndClosePhone(stepDelay);
-        Log("Story: Bathroom mirror - stranger has NO REFLECTION");
-        PuzzleEvents.RaiseHint(new HintMessage { text = "Bathroom: Stranger has NO REFLECTION!", isMisleading = false, sourceId = "story04" });
-        yield return WaitAndClosePhone(stepDelay);
-        Log("Story: Real agent message - accident, colleague never came");
-        PuzzleEvents.RaiseHint(new HintMessage { text = "Real Agent: Accident! My colleague never came. WHO IS THERE?!", isMisleading = false, sourceId = "story05" });
-        yield return WaitAndClosePhone(stepDelay);
-        Log("Story: Stranger disappears, doors locked, hide in small room near exit");
-        PuzzleEvents.RaiseHint(new HintMessage { text = "Stranger disappears. Doors locked. TRUST NO ONE.", isMisleading = false, sourceId = "story06" });
-        yield return WaitAndClosePhone(stepDelay);
+        try
+        {
+            Log("Story: Real estate viewing, stranger arrives, tour, objects disappearing");
+            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Agent: Sending colleague for house viewing.", isMisleading = false, sourceId = "story01" }); } catch (System.Exception e) { Log($"RaiseHint story01 ex: {e.Message}"); }
+            yield return WaitAndClosePhone(stepDelay);
+            Log("Story: Bathroom mirror - stranger has NO REFLECTION");
+            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Bathroom: Stranger has NO REFLECTION!", isMisleading = false, sourceId = "story04" }); } catch (System.Exception e) { Log($"RaiseHint story04 ex: {e.Message}"); }
+            yield return WaitAndClosePhone(stepDelay);
+            Log("Story: Real agent message - accident, colleague never came");
+            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Real Agent: Accident! My colleague never came. WHO IS THERE?!", isMisleading = false, sourceId = "story05" }); } catch (System.Exception e) { Log($"RaiseHint story05 ex: {e.Message}"); }
+            yield return WaitAndClosePhone(stepDelay);
+            Log("Story: Stranger disappears, doors locked, hide in small room near exit");
+            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Stranger disappears. Doors locked. TRUST NO ONE.", isMisleading = false, sourceId = "story06" }); } catch (System.Exception e) { Log($"RaiseHint story06 ex: {e.Message}"); }
+            yield return WaitAndClosePhone(stepDelay);
+            Log("StoryIntro completed");
+        }
+        catch (System.Exception e)
+        {
+            Log($"StoryIntro exception (will continue): {e.Message} {e.StackTrace}");
+            yield return new WaitForSeconds(0.5f);
+        }
     }
 
     IEnumerator WaitAndClosePhone(float delay)
     {
+        Log($"WaitAndClosePhone: waiting {delay}s");
         yield return new WaitForSeconds(delay);
-        bool closeFailed = false;
-        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception (ignored): {e.Message}"); closeFailed = true; }
+        Log("WaitAndClosePhone: delay done, attempting close");
+        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception (ignored): {e.Message}"); }
         MobilePhoneController phone = null;
         try
         {
             phone = MobilePhoneController.Instance;
             if (phone == null) phone = FindFirstObjectByType<MobilePhoneController>();
+            Log($"WaitAndClosePhone: phone instance {(phone!=null?"found":"null")} isOpen={phone?.IsOpen}");
         }
-        catch { }
+        catch (System.Exception e) { Log($"Find phone ex: {e.Message}"); }
         if (phone != null)
         {
             try
             {
-                if (phone.IsOpen) phone.SetOpen(false);
+                if (phone.IsOpen)
+                {
+                    phone.SetOpen(false);
+                    Log("WaitAndClosePhone: forced SetOpen(false)");
+                }
                 var doc = phone.GetComponent<UIDocument>();
                 if (doc != null && doc.rootVisualElement != null)
                 {
                     var root = doc.rootVisualElement.Q<VisualElement>("phone-root");
-                    if (root != null) root.EnableInClassList("hidden", true);
+                    if (root != null)
+                    {
+                        root.EnableInClassList("hidden", true);
+                        Log("WaitAndClosePhone: forced hidden class");
+                    }
                 }
             }
             catch (System.Exception e) { Log($"Second close attempt failed: {e.Message}"); }
         }
+        Log("WaitAndClosePhone: completed, continuing story");
         yield return null;
     }
 
