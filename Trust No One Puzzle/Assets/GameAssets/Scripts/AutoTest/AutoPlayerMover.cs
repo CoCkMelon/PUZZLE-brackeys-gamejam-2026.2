@@ -485,11 +485,16 @@ public class AutoPlayerMover : MonoBehaviour
             float bestDist = float.MaxValue;
             foreach (var item in items)
             {
+                if (item == null) continue;
                 if (item.IsHeld) continue;
                 if (item.OccupyingSlot != null && item.OccupyingSlot.IsCorrectlyFilled) continue;
+                // Skip items inside locked furniture (cabinet contents before unlock)
+                if (IsInsideLockedFurniture(item.gameObject)) continue;
+                // Skip penetrating items that are not reachable
+                if (IsItemPenetratingAndUnreachable(item)) continue;
                 bool needed = false;
                 var slots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
-                foreach (var s in slots) { if (!s.IsOccupied && s.RequiredItemId == item.ItemId) { needed = true; break; } }
+                foreach (var s in slots) { if (s != null && !s.IsOccupied && s.RequiredItemId == item.ItemId) { needed = true; break; } }
                 if (!needed && mode == TestMode.FullGameAuto) needed = true;
                 if (!needed) continue;
                 float d = Vector3.Distance(transform.position, item.transform.position);
@@ -598,6 +603,45 @@ public class AutoPlayerMover : MonoBehaviour
         return null;
     }
 
+    bool IsInsideLockedFurniture(GameObject go)
+    {
+        if (go == null) return false;
+        var parent = go.transform.parent;
+        while (parent != null)
+        {
+            var openable = parent.GetComponent<OpenableFurniture>();
+            if (openable != null && openable.IsLocked)
+                return true;
+            parent = parent.parent;
+        }
+        return false;
+    }
+
+    bool IsItemPenetratingAndUnreachable(GameObject go)
+    {
+        if (go == null) return false;
+        // If item is inside a non-trigger collider that is not its own
+        var cols = Physics.OverlapBox(go.transform.position, go.transform.localScale * 0.6f, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+        foreach (var c in cols)
+        {
+            if (c == null) continue;
+            if (c.isTrigger) continue;
+            if (c.gameObject == go) continue;
+            if (c.transform.IsChildOf(go.transform)) continue;
+            // If overlapping with a large furniture collider and item is kinematic (hidden inside cabinet)
+            var rb = c.attachedRigidbody;
+            if (rb != null && rb.isKinematic && c.bounds.Contains(go.transform.position))
+                return true;
+        }
+        return false;
+    }
+
+    bool IsItemPenetratingAndUnreachable(PlaceableItem item)
+    {
+        if (item == null) return false;
+        return IsItemPenetratingAndUnreachable(item.gameObject);
+    }
+
     private bool TryAutoInteract()
     {
         bool did = false;
@@ -620,8 +664,11 @@ public class AutoPlayerMover : MonoBehaviour
         float bestDist = float.MaxValue;
         foreach (var item in items)
         {
+            if (item == null) continue;
             if (item.IsHeld) continue;
             if (item.OccupyingSlot != null) continue;
+            if (IsInsideLockedFurniture(item.gameObject)) continue;
+            if (IsItemPenetratingAndUnreachable(item)) continue;
             float d = Vector3.Distance(transform.position, item.transform.position);
             if (d < interactRange && d < bestDist) { bestDist = d; closest = item; }
         }
