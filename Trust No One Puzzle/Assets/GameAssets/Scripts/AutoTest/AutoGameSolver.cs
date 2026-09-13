@@ -321,57 +321,23 @@ public class AutoGameSolver : MonoBehaviour
 
     IEnumerator WaitAndClosePhone(float delay)
     {
-        Log($"WaitAndClosePhone: waiting {delay}s (unscaled frame loop)");
+        Log($"WaitAndClosePhone (no-op, waiting {delay}s unscaled)");
         float elapsed = 0f;
         while (elapsed < delay)
         {
             elapsed += Time.unscaledDeltaTime;
-            // Also try to close phone each frame to avoid blocking view
-            if (elapsed > 0.5f)
+            if (elapsed < 0.001f) elapsed += Time.deltaTime; // fallback if unscaled is 0
+            if (Time.unscaledDeltaTime == 0f && Time.deltaTime == 0f)
             {
-                try
-                {
-                    var phone = MobilePhoneController.Instance;
-                    if (phone == null) phone = FindFirstObjectByType<MobilePhoneController>();
-                    if (phone != null && phone.IsOpen)
-                    {
-                        // Only force close after 0.5s to let player see message briefly
-                        if (elapsed > 1f)
-                        {
-                            phone.SetOpen(false);
-                        }
-                    }
-                }
-                catch { }
+                // If both deltas are 0, still advance by real time to avoid deadlock
+                elapsed += 0.02f;
             }
             yield return null;
         }
-        Log("WaitAndClosePhone: delay done, final close attempt");
-        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception: {e.Message}"); }
-        MobilePhoneController phone2 = null;
-        try
-        {
-            phone2 = MobilePhoneController.Instance;
-            if (phone2 == null) phone2 = FindFirstObjectByType<MobilePhoneController>();
-        }
-        catch { }
-        if (phone2 != null)
-        {
-            try
-            {
-                if (phone2.IsOpen) phone2.SetOpen(false);
-                var doc = phone2.GetComponent<UIDocument>();
-                if (doc != null && doc.rootVisualElement != null)
-                {
-                    var root = doc.rootVisualElement.Q<VisualElement>("phone-root");
-                    if (root != null) root.EnableInClassList("hidden", true);
-                }
-            }
-            catch (System.Exception e) { Log($"Final close ex: {e.Message}"); }
-        }
-        Log("WaitAndClosePhone: completed");
+        Log($"WaitAndClosePhone: done after {elapsed}s");
         yield return null;
     }
+
 
 
 

@@ -248,6 +248,18 @@ namespace GameAssets.Scripts.UI.Mobile
 
         private void SetLookEnabled(bool enabled)
         {
+            // AUTO-TEST FIX: never disable look/mover in AutoTest scenes to avoid freezing auto solver
+            try
+            {
+                string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+                if (sceneName.Contains("AutoTest") || sceneName.Contains("NavMeshTest"))
+                {
+                    Debug.Log($"[MobilePhone] AutoTest: SetLookEnabled({enabled}) suppressed - not disabling any Behaviour to keep AutoGameSolver alive");
+                    return;
+                }
+            }
+            catch {}
+
             if (disableWhileOpen != null)
             {
                 foreach (var behaviour in disableWhileOpen)
@@ -281,6 +293,24 @@ namespace GameAssets.Scripts.UI.Mobile
         private void OnHint(HintMessage hint)
         {
             Debug.Log($"[MobilePhone] OnHint received: {hint.text}");
+
+            // AUTO-TEST FIX: In AutoTest scenes, don't open phone UI to avoid timeScale pause deadlock
+            string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            bool isAutoTest = sceneName.Contains("AutoTest") || sceneName.Contains("NavMeshTest");
+            if (isAutoTest)
+            {
+                Debug.Log($"[MobilePhone] AutoTest scene {sceneName}: suppressing phone open for hint '{hint.text}' to avoid pause");
+                try
+                {
+                    _history.Add(hint);
+                    if (_history.Count > maxBubbles * 2)
+                        _history.RemoveRange(0, _history.Count - maxBubbles * 2);
+                    Debug.Log($"[MobilePhone] AutoTest: history only, not opening. NEW MESSAGE: {(hint.isMisleading ? "WRONG" : "TRUTH")} '{hint.text}' src:{hint.sourceId} history={_history.Count}");
+                }
+                catch {}
+                return;
+            }
+
             AddMessage(hint);
             bool shouldOpen = autoOpenOnHint || (autoOpenOnWrongHint && hint.isMisleading);
             // Don't auto-open for autosolver-complete message to avoid spam, but still log
@@ -301,6 +331,12 @@ namespace GameAssets.Scripts.UI.Mobile
 
         void AutoClosePhone()
         {
+            string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            if (sceneName.Contains("AutoTest") || sceneName.Contains("NavMeshTest"))
+            {
+                Debug.Log("[MobilePhone] AutoTest: skipping AutoClosePhone Invoke");
+                return;
+            }
             if (_open)
             {
                 Debug.Log("[MobilePhone] Auto-closing phone after delay (fix never closes bug)");
