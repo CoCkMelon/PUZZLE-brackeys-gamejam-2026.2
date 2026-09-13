@@ -84,7 +84,11 @@ public class AutoGameSolver : MonoBehaviour
             return;
         }
         CachePlayer();
-        if (autoStart) StartSolving();
+        if (autoStart)
+        {
+            Log("AutoGameSolver Start() autoStart true, starting");
+            StartSolving();
+        }
     }
 
     void CachePlayer()
@@ -164,9 +168,20 @@ public class AutoGameSolver : MonoBehaviour
 
     public void StartSolving()
     {
+        if (solverRoutine != null)
+        {
+            Log($"StartSolving called but already running in state {currentState}, ignoring second call to avoid interruption");
+            return;
+        }
+        solverRoutine = StartCoroutine(SolveRoutine());
+    }
+
+    public void RestartSolving()
+    {
         if (solverRoutine != null) StopCoroutine(solverRoutine);
         solverRoutine = StartCoroutine(SolveRoutine());
     }
+
 
     public void StopSolving()
     {
