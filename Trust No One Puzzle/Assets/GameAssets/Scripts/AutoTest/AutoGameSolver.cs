@@ -309,45 +309,70 @@ public class AutoGameSolver : MonoBehaviour
         Log("StoryIntro completed");
     }
 
+    IEnumerator WaitRealtime(float seconds)
+    {
+        float elapsed = 0f;
+        while (elapsed < seconds)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            yield return null;
+        }
+    }
+
     IEnumerator WaitAndClosePhone(float delay)
     {
-        Log($"WaitAndClosePhone: waiting {delay}s (Realtime)");
-        yield return new WaitForSecondsRealtime(delay);
-        Log("WaitAndClosePhone: delay done, attempting close");
-        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception (ignored): {e.Message}"); }
-        MobilePhoneController phone = null;
+        Log($"WaitAndClosePhone: waiting {delay}s (unscaled frame loop)");
+        float elapsed = 0f;
+        while (elapsed < delay)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            // Also try to close phone each frame to avoid blocking view
+            if (elapsed > 0.5f)
+            {
+                try
+                {
+                    var phone = MobilePhoneController.Instance;
+                    if (phone == null) phone = FindFirstObjectByType<MobilePhoneController>();
+                    if (phone != null && phone.IsOpen)
+                    {
+                        // Only force close after 0.5s to let player see message briefly
+                        if (elapsed > 1f)
+                        {
+                            phone.SetOpen(false);
+                        }
+                    }
+                }
+                catch { }
+            }
+            yield return null;
+        }
+        Log("WaitAndClosePhone: delay done, final close attempt");
+        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception: {e.Message}"); }
+        MobilePhoneController phone2 = null;
         try
         {
-            phone = MobilePhoneController.Instance;
-            if (phone == null) phone = FindFirstObjectByType<MobilePhoneController>();
-            Log($"WaitAndClosePhone: phone instance {(phone!=null?"found":"null")} isOpen={phone?.IsOpen}");
+            phone2 = MobilePhoneController.Instance;
+            if (phone2 == null) phone2 = FindFirstObjectByType<MobilePhoneController>();
         }
-        catch (System.Exception e) { Log($"Find phone ex: {e.Message}"); }
-        if (phone != null)
+        catch { }
+        if (phone2 != null)
         {
             try
             {
-                if (phone.IsOpen)
-                {
-                    phone.SetOpen(false);
-                    Log("WaitAndClosePhone: forced SetOpen(false)");
-                }
-                var doc = phone.GetComponent<UIDocument>();
+                if (phone2.IsOpen) phone2.SetOpen(false);
+                var doc = phone2.GetComponent<UIDocument>();
                 if (doc != null && doc.rootVisualElement != null)
                 {
                     var root = doc.rootVisualElement.Q<VisualElement>("phone-root");
-                    if (root != null)
-                    {
-                        root.EnableInClassList("hidden", true);
-                        Log("WaitAndClosePhone: forced hidden class");
-                    }
+                    if (root != null) root.EnableInClassList("hidden", true);
                 }
             }
-            catch (System.Exception e) { Log($"Second close attempt failed: {e.Message}"); }
+            catch (System.Exception e) { Log($"Final close ex: {e.Message}"); }
         }
-        Log("WaitAndClosePhone: completed, continuing story");
+        Log("WaitAndClosePhone: completed");
         yield return null;
     }
+
 
 
 
@@ -466,7 +491,7 @@ public class AutoGameSolver : MonoBehaviour
                 }
                 usedNavMesh = true;
                 Log($"Reached target {navTarget} (remaining {agent.remainingDistance})");
-                yield return new WaitForSecondsRealtime(0.1f);
+                yield return WaitRealtime(0.1f);
                 if (usedNavMesh) yield break;
             }
         }
@@ -491,7 +516,7 @@ public class AutoGameSolver : MonoBehaviour
             yield return null;
         }
         playerTransform.position = target;
-        yield return new WaitForSecondsRealtime(0.1f);
+        yield return WaitRealtime(0.1f);
     }
 
     bool IsSpotFree(Vector3 pos, Vector3 size)
@@ -559,7 +584,7 @@ public class AutoGameSolver : MonoBehaviour
                     if (picked)
                     {
                         // Keep visible for 1.2s so player sees carry
-                        yield return new WaitForSecondsRealtime(1.2f);
+                        yield return WaitRealtime(1.2f);
                         Log($"Carrying {keyId} visibly at holdPoint {carry.HeldItem?.transform.position}");
                     }
                 }
@@ -576,7 +601,7 @@ public class AutoGameSolver : MonoBehaviour
             if (carry != null && carry.IsCarrying)
             {
                 carry.DropInWorld();
-                yield return new WaitForSecondsRealtime(0.2f);
+                yield return WaitRealtime(0.2f);
             }
         }
         else
@@ -610,7 +635,7 @@ public class AutoGameSolver : MonoBehaviour
             if (carry != null && !carry.IsCarrying)
             {
                 carry.TryPickUp(placeable);
-                yield return new WaitForSecondsRealtime(1f);
+                yield return WaitRealtime(1f);
                 carry.DropInWorld();
             }
             Destroy(visualKey, 2f);
@@ -677,7 +702,7 @@ public class AutoGameSolver : MonoBehaviour
 
             Log($"Unlocking {target.name} (requires {GetField<string>(target, "requiredKeyId")})");
             target.Unlock();
-            yield return new WaitForSecondsRealtime(0.5f);
+            yield return WaitRealtime(0.5f);
             target.Open();
             Log($"Opened {target.name} locked={target.IsLocked} open={target.IsOpen}");
             if (!target.IsLocked && target.IsOpen) cabinetUnlockedWithKey = true;
@@ -731,31 +756,31 @@ public class AutoGameSolver : MonoBehaviour
         {
             yield return DrivePlayerTo(book.transform.position, $"pick {book.name}");
             TryPickup(book);
-            yield return new WaitForSecondsRealtime(0.3f);
+            yield return WaitRealtime(0.3f);
             yield return DrivePlayerTo(slotBook.transform.position, $"place {book.name} into {slotBook.SlotId}");
             Log($"Placing {book.ItemId} into {slotBook.SlotId} (correct per mirror)");
             slotBook.TryPlace(book);
-            yield return new WaitForSecondsRealtime(0.5f);
+            yield return WaitRealtime(0.5f);
         }
         if (slotCandle != null && candle != null)
         {
             yield return DrivePlayerTo(candle.transform.position, $"pick {candle.name}");
             TryPickup(candle);
-            yield return new WaitForSecondsRealtime(0.3f);
+            yield return WaitRealtime(0.3f);
             yield return DrivePlayerTo(slotCandle.transform.position, $"place {candle.name}");
             Log($"Placing {candle.ItemId} into {slotCandle.SlotId}");
             slotCandle.TryPlace(candle);
-            yield return new WaitForSecondsRealtime(0.5f);
+            yield return WaitRealtime(0.5f);
         }
         if (slotVase != null && vase != null)
         {
             yield return DrivePlayerTo(vase.transform.position, $"pick {vase.name}");
             TryPickup(vase);
-            yield return new WaitForSecondsRealtime(0.3f);
+            yield return WaitRealtime(0.3f);
             yield return DrivePlayerTo(slotVase.transform.position, $"place {vase.name}");
             Log($"Placing {vase.ItemId} into {slotVase.SlotId}");
             slotVase.TryPlace(vase);
-            yield return new WaitForSecondsRealtime(0.5f);
+            yield return WaitRealtime(0.5f);
         }
 
         foreach (var slot in allSlots)
@@ -956,14 +981,14 @@ public class AutoGameSolver : MonoBehaviour
         {
             flicker.TriggerRoom2LightsOutSequence();
             PuzzleEvents.RaiseDrawerUnlocked("lights_out");
-            yield return new WaitForSecondsRealtime(6.5f);
+            yield return WaitRealtime(6.5f);
             PuzzleEvents.RaiseDrawerUnlocked("lights_back");
             Log("Lights back on - emergency board appears, hammer missing");
         }
         else
         {
             Log("LightFlickerSystem not found, simulating 6.5s lights out");
-            yield return new WaitForSecondsRealtime(2f);
+            yield return WaitRealtime(2f);
         }
 
         if (GameObject.Find("EmergencyBoard_GDD") == null)
@@ -1002,7 +1027,7 @@ public class AutoGameSolver : MonoBehaviour
                 var rb = hammerGo.GetComponent<Rigidbody>();
                 if (rb != null) rb.isKinematic = false;
                 bool picked = carry.TryPickUp(placeable);
-                yield return new WaitForSecondsRealtime(0.3f);
+                yield return WaitRealtime(0.3f);
                 Log($"TryPickUp hammer => {picked}, IsCarrying={carry.IsCarrying}, IsHeld={placeable.IsHeld}");
             }
 
@@ -1075,7 +1100,7 @@ public class AutoGameSolver : MonoBehaviour
                 boxGo.transform.position += dir * 0.5f;
                 Log($"Pushed box {bName} away");
             }
-            yield return new WaitForSecondsRealtime(0.2f);
+            yield return WaitRealtime(0.2f);
         }
 
         PuzzleEvents.RaiseHint(new HintMessage { text = "Boxes pushed! Path to hammer clear.", isMisleading = false, sourceId = "boxes_cleared" });
@@ -1127,7 +1152,7 @@ public class AutoGameSolver : MonoBehaviour
         Log($"Found glass {glass.name} at {glass.transform.position}, breaking via BreakFromHammer()");
 
         glass.BreakFromHammer();
-        yield return new WaitForSecondsRealtime(0.6f);
+        yield return WaitRealtime(0.6f);
 
         if (FindFirstObjectByType<Glass>() == null)
         {
