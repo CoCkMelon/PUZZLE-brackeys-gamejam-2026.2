@@ -5,7 +5,8 @@ using System.Collections.Generic;
 /// <summary>
 /// Runtime NavMesh baker for auto-test scenes.
 /// Tries NavMeshSurface from AI Navigation package, falls back to NavMeshBuilder API.
-/// Now filters out non-readable meshes to avoid "does not allow read access" warnings.
+/// Fixed: now uses ONLY colliders (Box) to avoid "Source mesh does not allow read access" warnings.
+/// Meshes like Cabin 1, Drawer, etc. are non-readable and cause spam - we skip them entirely.
 /// </summary>
 public class NavMeshAutoBaker : MonoBehaviour
 {
@@ -17,6 +18,7 @@ public class NavMeshAutoBaker : MonoBehaviour
     [SerializeField] private float agentHeight = 2f;
     [SerializeField] private float agentClimb = 0.4f;
     [SerializeField] private float agentSlope = 45f;
+    [SerializeField] private bool useOnlyColliders = true;
 
     private NavMeshData _navMeshData;
     private NavMeshDataInstance _navMeshInstance;
@@ -27,7 +29,6 @@ public class NavMeshAutoBaker : MonoBehaviour
 
     public void TryBake()
     {
-        // Try NavMeshSurface via reflection first
         var surfaceType = System.Type.GetType("Unity.AI.Navigation.NavMeshSurface, Unity.AI.Navigation");
         if (surfaceType != null)
         {
@@ -50,62 +51,34 @@ public class NavMeshAutoBaker : MonoBehaviour
             }
         }
 
-        // Fallback: Check if NavMesh exists
         if (NavMesh.CalculateTriangulation().vertices.Length > 0)
         {
             Debug.Log($"[NavMeshAutoBaker] NavMesh exists: {NavMesh.CalculateTriangulation().vertices.Length} vertices");
             return;
         }
 
-        // Runtime build via NavMeshBuilder
-        Debug.Log("[NavMeshAutoBaker] No NavMesh, building via NavMeshBuilder API (readable meshes only)...");
+        Debug.Log("[NavMeshAutoBaker] No NavMesh, building via collider-only method...");
         BuildNavMeshRuntime();
     }
 
     private void BuildNavMeshRuntime()
     {
         var sources = new List<NavMeshBuildSource>();
-        int skippedUnreadable = 0;
-        int addedMeshes = 0;
         int addedColliders = 0;
 
-        // Add only readable MeshFilters
-        var renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
-        foreach (var r in renderers)
-        {
-            if (r == null || !r.gameObject.activeInHierarchy) continue;
-            if ((bakeLayers.value & (1 << r.gameObject.layer)) == 0) continue;
-            if (r.GetComponentInParent<CharacterController>() != null) continue;
-            try { if (r.transform.root.CompareTag("Player")) continue; } catch { /* tag not defined */ }
-
-            var mf = r.GetComponent<MeshFilter>();
-            if (mf != null && mf.sharedMesh != null)
-            {
-                // CRITICAL FIX: Skip non-readable meshes to avoid warning
-                if (!mf.sharedMesh.isReadable)
-                {
-                    skippedUnreadable++;
-                    continue;
-                }
-                var src = new NavMeshBuildSource();
-                src.shape = NavMeshBuildSourceShape.Mesh;
-                src.sourceObject = mf.sharedMesh;
-                src.transform = mf.transform.localToWorldMatrix;
-                src.area = 0;
-                sources.Add(src);
-                addedMeshes++;
-            }
-        }
-
-        // Add colliders as box sources for floors/walls - more reliable than meshes
+        // ONLY use colliders - never meshes, to avoid unreadable warnings
         var colliders = FindObjectsByType<Collider>(FindObjectsSortMode.None);
         foreach (var c in colliders)
         {
             if (c == null || !c.gameObject.activeInHierarchy) continue;
             if ((bakeLayers.value & (1 << c.gameObject.layer)) == 0) continue;
-            if (c is MeshCollider) continue; // skip mesh colliders, often non-readable too
+            if (c is MeshCollider) continue;
             if (c.GetComponentInParent<CharacterController>() != null) continue;
-            if (c.isTrigger) continue; // don't bake triggers
+            if (c.isTrigger) continue;
+            // Skip small furniture colliders that shouldn't be walkable
+            if (c.bounds.size.y > 1f && c.bounds.size.x < 2f && c.bounds.size.z < 2f) continue; // tall narrow = furniture
+
+            try { if (c.transform.root.CompareTag("Player")) continue; } catch { }
 
             var src = new NavMeshBuildSource();
             src.shape = NavMeshBuildSourceShape.Box;
@@ -116,12 +89,11 @@ public class NavMeshAutoBaker : MonoBehaviour
             addedColliders++;
         }
 
-        Debug.Log($"[NavMeshAutoBaker] Sources: {addedMeshes} readable meshes, {addedColliders} colliders, skipped {skippedUnreadable} unreadable");
+        Debug.Log($"[NavMeshAutoBaker] Sources: {addedColliders} colliders (mesh sources skipped to avoid read access errors)");
 
         if (sources.Count == 0)
         {
-            Debug.LogWarning("[NavMeshAutoBaker] No valid sources found, creating simple plane NavMesh");
-            // Create a simple walkable plane as fallback
+            Debug.LogWarning("[NavMeshAutoBaker] No collider sources, creating simple plane");
             var src = new NavMeshBuildSource();
             src.shape = NavMeshBuildSourceShape.Box;
             src.size = new Vector3(100, 0.1f, 100);
@@ -152,11 +124,11 @@ public class NavMeshAutoBaker : MonoBehaviour
         if (_navMeshData != null)
         {
             _navMeshInstance = NavMesh.AddNavMeshData(_navMeshData);
-            Debug.Log($"[NavMeshAutoBaker] Runtime NavMesh built: {sources.Count} sources, bounds {bounds.size}, valid={_navMeshInstance.valid}, triangulation vertices={NavMesh.CalculateTriangulation().vertices.Length}");
+            Debug.Log($"[NavMeshAutoBaker] Runtime NavMesh built: {sources.Count} collider sources, bounds {bounds.size}, valid={_navMeshInstance.valid}, vertices={NavMesh.CalculateTriangulation().vertices.Length}");
         }
         else
         {
-            Debug.LogWarning("[NavMeshAutoBaker] Failed to build NavMesh via NavMeshBuilder");
+            Debug.LogWarning("[NavMeshAutoBaker] Failed to build NavMesh");
         }
     }
 
