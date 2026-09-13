@@ -40,14 +40,16 @@ public class GDDPuzzleBootstrap : MonoBehaviour
     public string escapeVolumeName = "EscapeVolume_GDD";
     public string outsideViewName = "OutsideView_GDD";
 
-    [Tooltip("Room 2's far (-Z) wall face is the plane z = -16.81 (imported `Walls` mesh, world AABB x[-18.79,-8.96] y[0,3.92] z[-16.81,-4.93]). The panel sits flush against its inner face, right where the GDD puts the hammer behind the sofa.")]
-    public Vector3 escapeWallCentre = new Vector3(-14.185f, 1.96f, -16.51f);
-    public float escapeWallThickness = 0.4f;
+    [Tooltip("Room 2's storage (west, -X) wall. The imported `Walls` mesh (Room 2 walls.fbx, world AABB x[-16.16,-6.33] y[0,3.92] z[-16.80,-4.92]) has a real modelled aperture in this wall: outer face x=-16.16, inner face x=-16.06, opening z[-12.05,-10.10] x y[1.03,2.89], with jamb/head/sill reveals already built. These values describe that aperture. They are only used when a scene has no authored window and one has to be built from scratch.")]
+    public Vector3 escapeWallCentre = new Vector3(-16.11f, 1.96f, -11.075f);
+    public float escapeWallThickness = 0.10f;
     public float escapePanelWidth = 3.2f;
-    public float escapeOpeningWidth = 1.4f;
-    public float escapeOpeningHeight = 1.2f;
-    public float escapeSillHeight = 0.9f;
+    public float escapeOpeningWidth = 1.95f;
+    public float escapeOpeningHeight = 1.86f;
+    public float escapeSillHeight = 1.03f;
     public float escapeRoomHeight = 3.92f;
+    [Tooltip("The wall runs along Z here, so a fabricated panel has to be rotated to face -X. The authored window needs no rotation - it is already part of the mesh.")]
+    public Vector3 escapeWallEuler = new Vector3(0f, 90f, 0f);
 
     [Header("Assembly")]
     public bool verboseAssembly = true;
@@ -69,11 +71,20 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         Debug.Log($"[GDDPuzzleBootstrap] Init for {sceneName} - will assemble GDD scene for solvability");
     }
 
+    /// <summary>
+    /// True once SetupAll() has finished. AutoGameSolver waits on this: the solver must not go
+    /// looking for keys, the hammer or the toolbox before the scene has been assembled, or it
+    /// will report a fair failure for objects that simply do not exist yet.
+    /// </summary>
+    public static bool AssemblyComplete { get; private set; }
+
     IEnumerator Start()
     {
+        AssemblyComplete = false;
         yield return null;
         yield return null;
         SetupAll();
+        AssemblyComplete = true;
     }
 
     void SetupAll()
@@ -804,8 +815,28 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         });
         Log($"LightFlicker setup: {flicker.targetLights.Count} lights, duration {lightOutDuration}s");
 
-        // 4. Hammer behind sofa per GDD
-        var hammerGo = GameObject.Find("Hammer") ?? GameObject.Find("Hammer.001");
+        // 4. Hammer behind sofa per GDD.
+        // The imported room has two candidates: "Hammer", which is an empty transform with no
+        // mesh at all, and "Hammer.001", which carries the actual MeshFilter/MeshRenderer/
+        // collider. Preferring "Hammer" by name gave the player an invisible hammer to find, so
+        // pick whichever candidate can actually be seen.
+        GameObject hammerGo = null;
+        foreach (var candidate in new[] { GameObject.Find("Hammer.001"), GameObject.Find("Hammer") })
+        {
+            if (candidate == null) continue;
+            if (candidate.GetComponentInChildren<MeshRenderer>() != null) { hammerGo = candidate; break; }
+            if (hammerGo == null) hammerGo = candidate; // remember as a fallback
+        }
+        if (hammerGo != null && hammerGo.GetComponentInChildren<MeshRenderer>() == null)
+        {
+            Log($"{hammerGo.name} has no renderer - giving it a visible body so it can be found by sight");
+            var vis = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            vis.name = "HammerVisual";
+            vis.transform.SetParent(hammerGo.transform, false);
+            vis.transform.localScale = new Vector3(0.05f, 0.3f, 0.1f);
+            var vc = vis.GetComponent<Collider>();
+            if (vc != null) Destroy(vc);
+        }
         if (hammerGo == null)
         {
             hammerGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -813,6 +844,7 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             hammerGo.transform.localScale = new Vector3(0.05f, 0.3f, 0.1f);
             Log("Created Hammer");
         }
+        Log($"Hammer object selected: {hammerGo.name}");
         var hammerPlaceable = hammerGo.GetComponent<PlaceableItem>();
         if (hammerPlaceable == null) hammerPlaceable = hammerGo.AddComponent<PlaceableItem>();
         SetField(hammerPlaceable, "itemId", hammerId);
@@ -824,14 +856,16 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         Vector3 hammerPos;
         if (sofa != null)
         {
-            // Behind the sofa, but clear of the escape wall panel: the panel occupies
-            // x[-15.785,-12.585] z[-16.71,-16.31] y[0,3.92], so the old (0.8, 0.15, -1.5) offset
-            // buried the hammer in Wall_Pier_Right. This offset puts it beside the sofa instead.
-            hammerPos = sofa.transform.position + new Vector3(1.9f, 0.15f, -0.8f);
+            // Genuinely behind the sofa, per the GDD. The old sideways (1.9, 0.15, -0.8) offset
+            // only existed to dodge the fabricated wall panel's Wall_Pier_Right; that panel is
+            // gone now (the window lives in the real wall mesh on the west side), so the hammer
+            // goes back where the design wants it. The sofa sits at z=-15.23 and the room's
+            // south wall is at z=-16.80, so -1.1 tucks it into the gap behind.
+            hammerPos = sofa.transform.position + new Vector3(0f, 0.15f, -1.1f);
         }
         else
         {
-            hammerPos = new Vector3(-12.2f, 0.2f, -16.0f);
+            hammerPos = new Vector3(-14.18f, 0.2f, -16.33f);
         }
         // Ensure hammer not penetrating sofa or floor
         Vector3 hammerSize = hammerGo.transform.localScale;
@@ -1030,16 +1064,32 @@ public class GDDPuzzleBootstrap : MonoBehaviour
 
     void SetupEnding_GDD()
     {
-        Log("--- Ending GDD Assembly: real window opening in Room 2's far wall ---");
+        Log("--- Ending GDD Assembly: window in Room 2's storage (west) wall ---");
 
+        // The AutoTest scenes have the window baked in: the imported Room 2 wall mesh already
+        // contains the aperture, and the pane that fills it is a real scene object. Reuse that
+        // and do NOT fabricate a second floating panel on top of it.
         var root = GameObject.Find(escapeWindowRootName);
-        if (root == null)
+        var bakedPane = GameObject.Find(breakableWindowName);
+        bool authored = root != null && bakedPane != null;
+
+        if (authored)
         {
-            Log($"{escapeWindowRootName} is not authored in this scene - building the wall + opening at runtime");
+            Log($"Reusing the authored window: {breakableWindowName} at {bakedPane.transform.position} " +
+                $"in the modelled aperture, with {escapeWindowRootName} supplying the broken frame, " +
+                "outside view and escape volume. Not building a runtime panel.");
+        }
+        else if (root == null)
+        {
+            Log($"{escapeWindowRootName} is not authored in this scene - building a wall panel + opening at runtime");
             root = BuildEscapeWall();
         }
 
-        var glass = root != null ? root.GetComponentInChildren<Glass>() : FindFirstObjectByType<Glass>();
+        // The authored pane is a sibling of the root (it belongs to the imported wall mesh),
+        // so search the whole scene, not just the root's children.
+        var glass = bakedPane != null ? bakedPane.GetComponent<Glass>() : null;
+        if (glass == null && root != null) glass = root.GetComponentInChildren<Glass>(true);
+        if (glass == null) glass = FindFirstObjectByType<Glass>();
         if (glass == null)
         {
             Log("ERROR: no Glass component on the escape window - ending cannot be completed");
@@ -1129,9 +1179,10 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             }
             catch (System.Exception e) { Log($"Player warp fix exception: {e.Message}"); }
 
-        Log($"Ending window ready: {glass.name} at {glass.transform.position} in the wall plane, opening " +
-            $"{escapeOpeningWidth}x{escapeOpeningHeight}m, sill {escapeSillHeight}m, fracture " +
-            $"{GetField<int>(glass, "fracturePieces")} pieces, escape volume {(escapeVolume != null ? "present" : "MISSING")}");
+        Log($"Ending window ready ({(authored ? "authored in the scene" : "built at runtime")}): {glass.name} at " +
+            $"{glass.transform.position}, opening {escapeOpeningWidth}x{escapeOpeningHeight}m, sill {escapeSillHeight}m, " +
+            $"fracture {GetField<int>(glass, "fracturePieces")} pieces, escape volume " +
+            $"{(escapeVolume != null ? "present" : "MISSING")}");
     }
 
     void OnWindowBroken()
@@ -1193,6 +1244,8 @@ public class GDDPuzzleBootstrap : MonoBehaviour
     {
         var root = new GameObject(escapeWindowRootName);
         root.transform.position = escapeWallCentre;
+        // Room 2's storage wall runs along Z, so the panel has to face -X, not -Z.
+        root.transform.rotation = Quaternion.Euler(escapeWallEuler);
 
         float headY = escapeSillHeight + escapeOpeningHeight;
 
@@ -1435,24 +1488,40 @@ public class GDDPuzzleBootstrap : MonoBehaviour
         Log($"Spawned key {keyId} ({displayName}) in {parent.name} at {localOffset}");
     }
 
+    /// <summary>
+    /// The emergency board is a narrative hint prop, not a puzzle gate - nothing is unlocked by
+    /// reading it. It used to appear as a bare cube at a hardcoded (0, 1.5, 3), which is not even
+    /// inside Room 2. Now it is mounted flat on Room 2's storage wall beside the toolbox, clear of
+    /// the window aperture at z[-12.05,-10.10], so it reads as a sign on a wall.
+    /// </summary>
     void SpawnEmergencyBoard_GDD()
     {
         if (GameObject.Find("EmergencyBoard_GDD") != null) return;
+
         var boardGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
         boardGo.name = "EmergencyBoard_GDD";
-        boardGo.transform.position = new Vector3(0, 1.5f, 3);
-        boardGo.transform.localScale = new Vector3(1.2f, 0.6f, 0.05f);
+
+        // Anchor to the toolbox so the board follows the room rather than a magic constant.
+        var toolbox = GameObject.Find("tool Box") ?? GameObject.Find("Tool Box");
+        Vector3 pos = toolbox != null
+            ? new Vector3(-16.0f, 1.55f, toolbox.transform.position.z + 0.6f)
+            : new Vector3(-16.0f, 1.55f, -8.8f);
+
+        // Keep it off the glass no matter where the toolbox ends up.
+        if (pos.z < -9.9f && pos.z > -12.25f) pos.z = -9.7f;
+
+        boardGo.transform.position = pos;
+        boardGo.transform.rotation = Quaternion.Euler(0f, 90f, 0f); // flat against the west wall
+        boardGo.transform.localScale = new Vector3(0.9f, 0.6f, 0.04f);
+
+        // A sign should not be something you bump into or try to pick up.
+        var col = boardGo.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
         var rend = boardGo.GetComponent<Renderer>();
-        if (rend != null) rend.material.color = Color.red;
-        // Add text marker
-        if (createVisualMarkers)
-        {
-            var textGo = new GameObject("EmergencyText");
-            textGo.transform.SetParent(boardGo.transform);
-            textGo.transform.localPosition = new Vector3(0, 0, -0.03f);
-            // Could add TextMeshPro but keep simple
-        }
-        Log("Emergency board spawned: says no hammer, check behind sofa");
+        if (rend != null) rend.material.color = new Color(0.75f, 0.12f, 0.12f);
+
+        Log($"Emergency board mounted on the storage wall at {pos}: hammer missing, check behind the sofa");
     }
 
     void SetField(object obj, string fieldName, object value)

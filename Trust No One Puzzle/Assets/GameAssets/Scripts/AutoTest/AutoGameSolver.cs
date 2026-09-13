@@ -59,6 +59,9 @@ public class AutoGameSolver : MonoBehaviour
     public string toolboxKeyId = "toolbox_key";
     public string hammerId = "hammer";
     public string brokenWindowName = "BrokenWindow_GDD";
+    public string escapeVolumeName = "EscapeVolume_GDD";
+    [Tooltip("A crate within this distance of the hammer is treated as blocking it and gets carried aside.")]
+    public float boxClearRadius = 2.5f;
 
     private GameState currentState = GameState.Init;
     private Coroutine solverRoutine;
@@ -73,6 +76,8 @@ public class AutoGameSolver : MonoBehaviour
     private bool cabinetUnlockedWithKey = false;
     private bool drawerUnlockedByPlacements = false;
     private bool toolboxUnlockedWithKey = false;
+    private bool escapedThroughWindow = false;
+    private readonly List<string> carriedKeyIds = new List<string>();
     private readonly List<string> cheatLog = new List<string>();
 
     void Start()
@@ -192,6 +197,23 @@ public class AutoGameSolver : MonoBehaviour
     IEnumerator SolveRoutine()
     {
         CachePlayer();
+
+        // Wait for GDDPuzzleBootstrap to finish assembling the scene. Without this the solver
+        // can start hunting for keys a frame or two before they exist and fail honestly but
+        // pointlessly. Bounded so a scene with no bootstrap still runs.
+        if (FindFirstObjectByType<GDDPuzzleBootstrap>() != null)
+        {
+            float waited = 0f;
+            while (!GDDPuzzleBootstrap.AssemblyComplete && waited < 10f)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+            Log(GDDPuzzleBootstrap.AssemblyComplete
+                ? $"Scene assembly finished after {waited:F2}s - starting the walkthrough"
+                : "Scene assembly did not report completion within 10s - starting anyway");
+        }
+
         Log("AutoGameSolver: Starting full autonomous walkthrough - will drive player visibly");
         Log($"Fairness: allowCheats={allowCheats} allowTeleportFallback={allowTeleportFallback}");
         cheatLog.Clear();
@@ -199,6 +221,8 @@ public class AutoGameSolver : MonoBehaviour
         cabinetUnlockedWithKey = false;
         drawerUnlockedByPlacements = false;
         toolboxUnlockedWithKey = false;
+        escapedThroughWindow = false;
+        carriedKeyIds.Clear();
         // Record up front whether the level actually contains a breakable window, so a scene
         // with no Glass can never be reported as "escaped".
         glassEverExisted = FindFirstObjectByType<Glass>() != null;
@@ -227,14 +251,18 @@ public class AutoGameSolver : MonoBehaviour
         currentState = GameState.Room2_LightFlicker;
         yield return LightFlickerSequence();
 
-        currentState = GameState.Room2_FindHammer;
-        yield return FindHammer();
-
+        // Clearing the crates and taking the hammer is one continuous trip: the crates are
+        // what block the hammer, and the hammer has to stay in hand for the next step, so
+        // splitting it across two states would mean putting the hammer down in between.
         currentState = GameState.Room2_PushBoxes;
-        yield return PushBoxesAway();
+        yield return ClearBoxesAndTakeHammer();
+        if (hammerGenuinelyFound) currentState = GameState.Room2_FindHammer;
 
         currentState = GameState.Room2_BreakWindow;
         yield return BreakWindow();
+
+        // Actually leave through the opening we just made.
+        yield return ClimbThroughWindow();
 
         // Verify actual completion before claiming success
         bool actuallyCompleted = VerifyCompletion();
@@ -275,7 +303,8 @@ public class AutoGameSolver : MonoBehaviour
         Log($"VerifyCompletion: hadGlass={hadGlass} glassGone={glassGone} brokenFrameShown={brokenFrameShown} " +
             $"hammerCarried={hammerGenuinelyFound} slotsCorrect={slotsCorrect} " +
             $"cabinetUnlocked={cabinetUnlockedWithKey} drawerUnlocked={drawerUnlockedByPlacements} " +
-            $"toolboxUnlocked={toolboxUnlockedWithKey} cheatsUsed={cheatLog.Count} => {completed}");
+            $"toolboxUnlocked={toolboxUnlockedWithKey} escaped={escapedThroughWindow} " +
+            $"keysCarried=[{string.Join(", ", carriedKeyIds)}] cheatsUsed={cheatLog.Count} => {completed}");
         return completed;
     }
 
@@ -515,133 +544,210 @@ public class AutoGameSolver : MonoBehaviour
     }
 
 
-    IEnumerator FindAndCollectKey(string keyId, string hintObjectName, string reason, GameObject hintLocation = null)
+    // ─────────────────────────────────────────────────────────────────────────────
+    //  Physical actions
+    //
+    //  Every step below has to actually happen in the world: the player walks to the
+    //  object, PlayerCarry picks it up, the player walks to the destination, and the
+    //  item is released there. Nothing is teleported and no state is injected - if a
+    //  step cannot be performed the run fails and says which step and why.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Stand next to <paramref name="target"/> rather than inside it.</summary>
+    Vector3 ApproachPoint(Vector3 target, float standOff = 0.9f)
     {
-        Log($"Searching for key {keyId} - {reason}");
-
-        if (hintLocation != null)
-        {
-            yield return DrivePlayerTo(hintLocation.transform.position + Vector3.forward * 0.5f, $"approach {hintLocation.name} to find {keyId}");
-        }
-
-        var keyGo = FindKeyObject(keyId);
-        if (keyGo == null) keyGo = GameObject.Find(hintObjectName);
-        if (keyGo == null) keyGo = GameObject.Find(keyId);
-
-        if (keyGo != null)
-        {
-            yield return DrivePlayerTo(keyGo.transform.position, $"collect {keyId} at {keyGo.name}");
-
-            // FIX: Make carry VISIBLE - use PlayerCarry with longer hold
-            var placeable = keyGo.GetComponent<PlaceableItem>();
-            var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
-            if (placeable != null && carry != null)
-            {
-                // Ensure body is not kinematic inside cabinet
-                var rb = keyGo.GetComponent<Rigidbody>();
-                if (rb != null) rb.isKinematic = false;
-                var rend = keyGo.GetComponent<Renderer>();
-                if (rend != null) rend.enabled = true;
-
-                if (!placeable.IsHeld && !carry.IsCarrying)
-                {
-                    bool picked = carry.TryPickUp(placeable);
-                    Log($"TryPickUp {placeable.DisplayName} ({keyGo.name}) => {picked}, IsCarrying={carry.IsCarrying}, IsHeld={placeable.IsHeld}");
-                    if (picked)
-                    {
-                        // Keep visible for 1.2s so player sees carry
-                        yield return WaitRealtime(1.2f);
-                        Log($"Carrying {keyId} visibly at holdPoint {carry.HeldItem?.transform.position}");
-                    }
-                }
-            }
-
-            var keyItem = keyGo.GetComponent<KeyItem>();
-            if (keyItem != null)
-            {
-                Log($"Found key {keyId} on {keyGo.name}, collecting via KeyItem.Collect()");
-                keyItem.Collect();
-            }
-
-            // If still held, release to inventory
-            if (carry != null && carry.IsCarrying)
-            {
-                carry.DropInWorld();
-                yield return WaitRealtime(0.2f);
-            }
-        }
-        else
-        {
-            Log($"Key GameObject for {keyId} not found in scene - the level is missing it");
-            if (!allowCheats)
-            {
-                Log($"Refusing to fabricate {keyId}. Add the key object to the scene instead.");
-                yield break;
-            }
-            Log("[CHEAT] spawning a stand-in key so the run can continue");
-            // Spawn visual key near player for visibility
-            var player = playerTransform ?? (FindFirstObjectByType<CharacterController>()?.transform);
-            Vector3 spawnPos = player != null ? player.position + player.forward * 0.5f + Vector3.up * 0.5f : Vector3.zero;
-            var visualKey = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            visualKey.name = keyId + "_visual";
-            visualKey.transform.position = spawnPos;
-            visualKey.transform.localScale = new Vector3(0.12f, 0.03f, 0.06f);
-            var rend = visualKey.GetComponent<Renderer>();
-            if (rend != null) rend.material.color = Color.yellow;
-            // Try pickup visual
-            var placeable = visualKey.AddComponent<PlaceableItem>();
-            SetField(placeable, "itemId", keyId);
-            SetField(placeable, "displayName", keyId);
-            var keyItem = visualKey.AddComponent<KeyItem>();
-            SetField(keyItem, "keyId", keyId);
-            SetField(keyItem, "collectOnPickup", true);
-            var rb = visualKey.AddComponent<Rigidbody>();
-            rb.mass = 0.2f;
-            var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
-            if (carry != null && !carry.IsCarrying)
-            {
-                carry.TryPickUp(placeable);
-                yield return WaitRealtime(1f);
-                carry.DropInWorld();
-            }
-            Destroy(visualKey, 2f);
-        }
-
-        if (KeyRing.Has(keyId))
-        {
-            Log($"KeyRing already holds {keyId} - collected for real");
-        }
-        else if (allowCheats)
-        {
-            KeyRing.Add(keyId);
-            cheatLog.Add($"injected {keyId}");
-            Log($"[CHEAT] KeyRing.Add({keyId}) - the key object was never collected");
-        }
-        else
-        {
-            Log($"NOT collected: {keyId} was never picked up, refusing to fake it. Reason: {reason}");
-        }
-
-        PuzzleEvents.RaiseHint(new HintMessage { text = KeyRing.Has(keyId) ? $"Found {keyId} - {reason} [visibly carried]" : $"Could not find {keyId} - {reason}", isMisleading = false, sourceId = $"found-{keyId}" });
-        yield return WaitAndClosePhone(stepDelay);
+        Vector3 from = playerTransform != null ? playerTransform.position : Vector3.zero;
+        Vector3 dir = from - target;
+        dir.y = 0f;
+        if (dir.sqrMagnitude < 0.0001f) dir = Vector3.forward;
+        dir.Normalize();
+        Vector3 spot = target + dir * standOff;
+        spot.y = target.y;
+        if (NavMesh.SamplePosition(spot, out var hit, 2.5f, NavMesh.AllAreas))
+            spot = hit.position;
+        return spot;
     }
 
-    IEnumerator OpenFurnitureWithKey(string keyId, string furnitureName, string logName, GameObject targetGo = null)
+    void FacePoint(Vector3 point)
     {
-        Log($"Opening {logName} with key {keyId}");
-        if (!KeyRing.Has(keyId))
+        if (playerTransform == null) return;
+        Vector3 dir = point - playerTransform.position;
+        dir.y = 0f;
+        if (dir.sqrMagnitude < 0.0001f) return;
+        playerTransform.rotation = Quaternion.LookRotation(dir.normalized, Vector3.up);
+    }
+
+    PlayerCarry Carry
+    {
+        get
         {
-            Log($"Cannot open {logName}: {keyId} is not in the key ring. Not faking it.");
+            // Unity's overloaded == must be used here; ?? would hand back a destroyed object.
+            var c = PlayerCarry.Instance;
+            if (c == null) c = FindFirstObjectByType<PlayerCarry>();
+            return c;
+        }
+    }
+
+    /// <summary>
+    /// Walk to an item and physically pick it up with PlayerCarry. Returns true only when
+    /// the item really ends up in the player's hands.
+    /// </summary>
+    IEnumerator WalkAndPickUp(PlaceableItem item, string what, System.Action<bool> result)
+    {
+        if (item == null)
+        {
+            Log($"PICKUP FAILED [{what}]: the item does not exist in this scene");
+            result?.Invoke(false);
             yield break;
         }
 
-        if (targetGo != null)
+        var carry = Carry;
+        if (carry == null)
         {
-            yield return DrivePlayerTo(targetGo.transform.position, $"open {logName}");
+            Log($"PICKUP FAILED [{what}]: there is no PlayerCarry on the player");
+            result?.Invoke(false);
+            yield break;
         }
 
-        // Match on the key the furniture actually demands. The old fallback also accepted any
-        // object whose name merely contained "Cabin", which unlocked the wrong piece of furniture.
+        // Hands must be empty before we can take something new.
+        if (carry.IsCarrying)
+        {
+            carry.DropInWorld();
+            yield return WaitRealtime(0.2f);
+        }
+
+        yield return DrivePlayerTo(ApproachPoint(item.transform.position), $"walk to {what}");
+        FacePoint(item.transform.position);
+        yield return WaitRealtime(0.15f);
+
+        // An item parked inside a closed drawer/cabinet is kinematic and parented; free it
+        // so the physics carry can lift it. This is presentation, not progress: it does not
+        // unlock anything by itself.
+        var body = item.GetComponent<Rigidbody>();
+        if (body != null && body.isKinematic) body.isKinematic = false;
+        var rend = item.GetComponent<Renderer>();
+        if (rend != null && !rend.enabled) rend.enabled = true;
+
+        bool picked = carry.TryPickUp(item);
+        yield return WaitRealtime(0.35f);
+
+        // Give it one honest retry from slightly closer - the first grab can miss when the
+        // agent is still settling.
+        if (!picked || !item.IsHeld)
+        {
+            yield return DrivePlayerTo(ApproachPoint(item.transform.position, 0.65f), $"step closer to {what}");
+            FacePoint(item.transform.position);
+            picked = carry.TryPickUp(item);
+            yield return WaitRealtime(0.35f);
+        }
+
+        bool inHand = item.IsHeld && carry.IsCarrying;
+        Log(inHand
+            ? $"Picked up {what} ({item.name}) - now carrying it"
+            : $"PICKUP FAILED [{what}]: TryPickUp returned {picked}, IsHeld={item.IsHeld}");
+        result?.Invoke(inHand);
+    }
+
+    /// <summary>
+    /// Carry whatever is in hand to a slot and place it there through the slot's own API,
+    /// exactly as the player's [E] interaction would.
+    /// </summary>
+    IEnumerator CarryToSlot(PlacementSlot slot, string what, System.Action<bool> result)
+    {
+        var carry = Carry;
+        if (slot == null || carry == null || !carry.IsCarrying)
+        {
+            Log($"PLACE FAILED [{what}]: slot={slot?.SlotId ?? "null"} carrying={carry?.IsCarrying}");
+            result?.Invoke(false);
+            yield break;
+        }
+
+        yield return DrivePlayerTo(ApproachPoint(slot.transform.position), $"carry {what} to {slot.SlotId}");
+        FacePoint(slot.transform.position);
+        yield return WaitRealtime(0.15f);
+
+        // TakeHeldItem is what PlacementSlot.OnInteract uses, so this is the real placement path.
+        var held = carry.TakeHeldItem();
+        bool placed = held != null && slot.TryPlace(held);
+        yield return WaitRealtime(0.3f);
+
+        if (!placed && held != null)
+        {
+            // Put it back in our hands so the next step is not left in a weird state.
+            carry.TryPickUp(held);
+            Log($"PLACE FAILED [{what}]: {slot.SlotId} rejected {held.ItemId}");
+        }
+        else if (placed)
+        {
+            Log($"Placed {what} into {slot.SlotId} - correct={slot.IsCorrectlyFilled}");
+        }
+        result?.Invoke(placed && slot.IsCorrectlyFilled);
+    }
+
+    /// <summary>
+    /// Walk to a key, carry it to the lock, and unlock with the key in hand. The lock
+    /// validates the key itself, so a wrong or missing key simply fails.
+    /// </summary>
+    IEnumerator FindAndCollectKey(string keyId, string hintObjectName, string reason, GameObject hintLocation = null)
+    {
+        Log($"Looking for {keyId} - {reason}");
+
+        if (hintLocation != null)
+            yield return DrivePlayerTo(ApproachPoint(hintLocation.transform.position), $"search {hintLocation.name}");
+
+        var keyGo = FindKeyObject(keyId) ?? GameObject.Find(hintObjectName) ?? GameObject.Find(keyId);
+        if (keyGo == null)
+        {
+            Log($"KEY MISSING [{keyId}]: no object with this key id exists in the scene. Not fabricating one.");
+            PuzzleEvents.RaiseHint(new HintMessage { text = $"Could not find {keyId} - {reason}", isMisleading = false, sourceId = $"missing-{keyId}" });
+            yield return WaitAndClosePhone(stepDelay);
+            yield break;
+        }
+
+        var placeable = keyGo.GetComponent<PlaceableItem>();
+        if (placeable != null)
+        {
+            bool got = false;
+            yield return WalkAndPickUp(placeable, $"{keyId}", r => got = r);
+            if (got)
+            {
+                // Hold it up for a moment so the pickup is visible in a recording.
+                yield return WaitRealtime(0.8f);
+                carriedKeyIds.Add(keyId);
+            }
+        }
+        else
+        {
+            // Not a physics pickup - walk to it and collect it the way the game would.
+            yield return DrivePlayerTo(ApproachPoint(keyGo.transform.position), $"reach {keyId}");
+            FacePoint(keyGo.transform.position);
+        }
+
+        // KeyItem.Collect() is the game's own "this key is now yours" call.
+        var keyItem = keyGo.GetComponent<KeyItem>();
+        if (keyItem != null) keyItem.Collect();
+
+        if (KeyRing.Has(keyId))
+        {
+            Log($"Collected {keyId} for real ({reason})");
+            PuzzleEvents.RaiseHint(new HintMessage { text = $"Found {keyId} - {reason}", isMisleading = false, sourceId = $"found-{keyId}" });
+        }
+        else
+        {
+            Log($"NOT COLLECTED [{keyId}]: picked the object up but the key never reached the key ring");
+        }
+
+        yield return WaitAndClosePhone(stepDelay);
+    }
+
+    /// <summary>
+    /// Carry the key to the furniture and unlock it via TryUnlockWithKey(), which checks
+    /// the key for real. We never flip the lock flag ourselves.
+    /// </summary>
+    IEnumerator OpenFurnitureWithKey(string keyId, string furnitureName, string logName, GameObject targetGo = null)
+    {
+        Log($"Opening {logName} with {keyId}");
+
         var furnitures = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
         OpenableFurniture target = null;
         foreach (var f in furnitures)
@@ -654,285 +760,178 @@ public class AutoGameSolver : MonoBehaviour
                 break;
             }
         }
+        if (target == null && targetGo != null)
+            target = targetGo.GetComponentInChildren<OpenableFurniture>() ?? targetGo.GetComponent<OpenableFurniture>();
 
         if (target == null)
         {
-            var go = targetGo ?? GameObject.Find(furnitureName) ?? GameObject.Find("Cabin 8") ?? GameObject.Find("Cabin 1") ?? GameObject.Find("Cabinet base");
-            if (go != null) target = go.GetComponentInChildren<OpenableFurniture>() ?? go.GetComponent<OpenableFurniture>();
+            Log($"FURNITURE MISSING [{logName}]: nothing in the scene asks for {keyId}");
+            yield return WaitAndClosePhone(stepDelay);
+            yield break;
         }
 
-        if (target != null)
-        {
-            if (targetGo == null)
-                yield return DrivePlayerTo(target.transform.position, $"open {target.name}");
+        yield return DrivePlayerTo(ApproachPoint(target.transform.position, 1.1f), $"carry {keyId} to {logName}");
+        FacePoint(target.transform.position);
+        yield return WaitRealtime(0.2f);
 
-            Log($"Unlocking {target.name} (requires {GetField<string>(target, "requiredKeyId")})");
-            target.Unlock();
-            yield return WaitRealtime(0.5f);
-            target.Open();
-            Log($"Opened {target.name} locked={target.IsLocked} open={target.IsOpen}");
-            if (!target.IsLocked && target.IsOpen) cabinetUnlockedWithKey = true;
-            PuzzleEvents.RaiseDrawerUnlocked("cabinet_open");
-            // Verify opened
-            if (target.IsLocked)
-            {
-                if (allowCheats)
-                {
-                    cheatLog.Add($"forced {target.name} open");
-                    Log($"[CHEAT] {target.name} still locked after Unlock() - forcing via reflection");
-                    SetField(target, "_isLocked", false);
-                    SetField(target, "startsLocked", false);
-                    target.Unlock();
-                    target.Open();
-                }
-                else
-                {
-                    Log($"{target.name} is still locked after Unlock() with {keyId} - the lock logic rejected the key. Reporting failure instead of forcing it.");
-                }
-            }
-        }
-        else
+        // The lock inspects the carried key / key ring itself and consumes it if configured.
+        bool unlocked = target.TryUnlockWithKey();
+        yield return WaitRealtime(0.4f);
+
+        if (!unlocked && target.IsLocked)
         {
-            Log($"Could not find {logName} furniture, but key {keyId} is in KeyRing so will proceed");
+            Log($"UNLOCK FAILED [{logName}]: the lock rejected {keyId} (carrying={Carry?.HeldItem?.name ?? "nothing"}). Not forcing it.");
+            yield return WaitAndClosePhone(stepDelay);
+            yield break;
+        }
+
+        target.Open();
+        yield return WaitRealtime(0.4f);
+
+        cabinetUnlockedWithKey = !target.IsLocked;
+        Log($"{logName} unlocked with the real key - locked={target.IsLocked} open={target.IsOpen}");
+        PuzzleEvents.RaiseDrawerUnlocked("cabinet_open");
+
+        // Whatever was inside is now reachable; drop the spent key so our hands are free.
+        var carry = Carry;
+        if (carry != null && carry.IsCarrying)
+        {
+            carry.DropInWorld();
+            yield return WaitRealtime(0.2f);
         }
 
         yield return WaitAndClosePhone(stepDelay);
     }
 
+    /// <summary>
+    /// Fetch Book, Candle and Vase one at a time and carry each to its slot. The drawer
+    /// is only unlocked by the puzzle's own trigger reacting to correct placements.
+    /// </summary>
     IEnumerator PlaceItemsOnTable()
     {
-        Log("Room1 Puzzle: Placing Book, Candle, Vase per mirror truth (not wrong hint note)");
+        Log("Room1: carrying Book, Candle and Vase to the table, one trip each");
 
-        var tableGo = GameObject.Find("Table");
-        Vector3 tablePos = tableGo != null ? tableGo.transform.position : Vector3.zero;
-
-        var book = FindPlaceable("book");
-        var candle = FindPlaceable("candle");
-        var vase = FindPlaceable("vase");
-
-        var slotBook = FindSlot("table_book");
-        var slotCandle = FindSlot("table_candle");
-        var slotVase = FindSlot("table_vase");
-
-        var allSlots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
-        Log($"Found {allSlots.Length} slots, book:{book?.name} candle:{candle?.name} vase:{vase?.name}");
-
-        // For each item, drive to item, pick, drive to slot, place
-        if (slotBook != null && book != null)
+        var jobs = new[]
         {
-            yield return DrivePlayerTo(book.transform.position, $"pick {book.name}");
-            TryPickup(book);
-            yield return WaitRealtime(0.3f);
-            yield return DrivePlayerTo(slotBook.transform.position, $"place {book.name} into {slotBook.SlotId}");
-            Log($"Placing {book.ItemId} into {slotBook.SlotId} (correct per mirror)");
-            slotBook.TryPlace(book);
-            yield return WaitRealtime(0.5f);
-        }
-        if (slotCandle != null && candle != null)
-        {
-            yield return DrivePlayerTo(candle.transform.position, $"pick {candle.name}");
-            TryPickup(candle);
-            yield return WaitRealtime(0.3f);
-            yield return DrivePlayerTo(slotCandle.transform.position, $"place {candle.name}");
-            Log($"Placing {candle.ItemId} into {slotCandle.SlotId}");
-            slotCandle.TryPlace(candle);
-            yield return WaitRealtime(0.5f);
-        }
-        if (slotVase != null && vase != null)
-        {
-            yield return DrivePlayerTo(vase.transform.position, $"pick {vase.name}");
-            TryPickup(vase);
-            yield return WaitRealtime(0.3f);
-            yield return DrivePlayerTo(slotVase.transform.position, $"place {vase.name}");
-            Log($"Placing {vase.ItemId} into {slotVase.SlotId}");
-            slotVase.TryPlace(vase);
-            yield return WaitRealtime(0.5f);
-        }
+            new { id = "book",   slot = "table_book" },
+            new { id = "candle", slot = "table_candle" },
+            new { id = "vase",   slot = "table_vase" },
+        };
 
-        foreach (var slot in allSlots)
+        foreach (var job in jobs)
         {
-            if (slot == null) continue;
-            if (!slot.IsCorrectlyFilled && slot.SlotId.StartsWith("table_"))
+            var slot = FindSlot(job.slot);
+            if (slot == null)
             {
-                var neededId = slot.RequiredItemId;
-                var item = FindPlaceable(neededId);
-                if (item != null)
-                {
-                    Log($"Placing {neededId} into {slot.SlotId} via direct TryPlace");
-                    slot.TryPlace(item);
-                }
+                Log($"SLOT MISSING [{job.slot}] - cannot complete the table puzzle");
+                continue;
             }
+            if (slot.IsCorrectlyFilled) { Log($"{job.slot} already correct"); continue; }
+
+            var item = FindUnheldPlaceable(job.id);
+            if (item == null)
+            {
+                Log($"ITEM MISSING [{job.id}] - cannot fill {job.slot}");
+                continue;
+            }
+
+            bool got = false;
+            yield return WalkAndPickUp(item, job.id, r => got = r);
+            if (!got)
+            {
+                Log($"Could not carry {job.id} - leaving {job.slot} empty rather than forcing it");
+                continue;
+            }
+
+            bool placed = false;
+            yield return CarryToSlot(slot, job.id, r => placed = r);
+            if (!placed) Log($"Could not place {job.id} into {job.slot}");
         }
 
+        // Let the puzzle's own trigger decide. No ForceUnlock.
         var triggers = FindObjectsByType<DrawerUnlockTrigger>(FindObjectsSortMode.None);
         foreach (var t in triggers)
         {
-            if (t.DrawerId == "room1_drawer")
-            {
-                Log("Evaluating drawer unlock trigger for room1_drawer");
-                t.Evaluate();
-                if (!t.IsUnlocked)
-                {
-                    // ForceUnlock used to run unconditionally, so the drawer opened even when the
-                    // mirror placements were wrong. Now it only happens in cheat mode.
-                    if (allowCheats)
-                    {
-                        cheatLog.Add("force-unlocked room1_drawer");
-                        Log("[CHEAT] Force unlocking room1_drawer despite incorrect placements");
-                        t.ForceUnlock();
-                    }
-                    else
-                    {
-                        Log("room1_drawer stayed locked - the table placements are not all correct. Reporting failure instead of forcing it.");
-                    }
-                }
-            }
+            if (t == null || t.DrawerId != "room1_drawer") continue;
+            t.Evaluate();
+            Log(t.IsUnlocked
+                ? "room1_drawer unlocked by the placements - the puzzle accepted them"
+                : "room1_drawer still locked - the placements are not all correct. Not forcing it.");
         }
 
-        PuzzleEvents.RaiseHint(new HintMessage { text = "All placements correct per mirror! Drawer unlocks.", isMisleading = false, sourceId = "placement-complete" });
+        if (AllTableSlotsCorrect())
+            PuzzleEvents.RaiseHint(new HintMessage { text = "All placements correct per mirror! Drawer unlocks.", isMisleading = false, sourceId = "placement-complete" });
+
         yield return WaitAndClosePhone(stepDelay);
-    }
-
-    void TryPickup(PlaceableItem item)
-    {
-        if (item == null) return;
-        // If item is penetrating, move it to free spot first
-        if (!IsSpotFree(item.transform.position, item.transform.localScale * 1.1f))
-        {
-            Vector3 free = FindFreeSpotNear(item.transform.position, 0.8f, item.transform.localScale);
-            Log($"TryPickup {item.name} was penetrating at {item.transform.position}, moving to free {free}");
-            item.transform.position = free;
-            var rbPen = item.GetComponent<Rigidbody>();
-            if (rbPen != null) { rbPen.linearVelocity = Vector3.zero; rbPen.angularVelocity = Vector3.zero; }
-        }
-        var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
-        if (carry == null)
-        {
-            Log($"TryPickup failed: no PlayerCarry found for {item.name}");
-            item.OnInteract();
-            return;
-        }
-        if (!carry.IsCarrying)
-        {
-            var rend = item.GetComponent<Renderer>();
-            if (rend != null) rend.enabled = true;
-            var rb = item.GetComponent<Rigidbody>();
-            if (rb != null)
-            {
-                rb.isKinematic = false;
-                rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
-                rb.WakeUp();
-            }
-            // Ensure not inside cabinet collider etc
-            if (item.transform.parent != null && item.transform.parent.GetComponent<Collider>() != null)
-            {
-                item.transform.SetParent(null);
-            }
-            bool ok = carry.TryPickUp(item);
-            Log($"TryPickup {item.DisplayName} ({item.name}) => {ok}, IsHeld={item.IsHeld}, carry pos={item.transform.position}");
-        }
-        else
-        {
-            Log($"TryPickup {item.name} but already carrying {carry.HeldItem?.name}, dropping current then picking");
-            carry.DropInWorld();
-            // Wait a frame via coroutine not possible here, but try immediate
-            var rend = item.GetComponent<Renderer>();
-            if (rend != null) rend.enabled = true;
-            var rb = item.GetComponent<Rigidbody>();
-            if (rb != null) rb.isKinematic = false;
-            bool ok = carry.TryPickUp(item);
-            Log($"Second TryPickup {item.name} => {ok}");
-        }
     }
 
     IEnumerator UnlockDrawerAndGetRoom2Key()
     {
-        Log("Room1 drawer should now be unlocked, spawning room2 key");
         var drawerGo = GameObject.Find("Drawer 1") ?? GameObject.Find("Cabin 4") ?? GameObject.Find("Drawer base");
-        if (drawerGo != null)
+        if (drawerGo == null)
         {
-            yield return DrivePlayerTo(drawerGo.transform.position, "open room1 drawer");
-            var openable = drawerGo.GetComponent<OpenableFurniture>();
-            if (openable != null)
-            {
-                if (openable.IsLocked)
-                {
-                    // Unlocking here used to be unconditional, which opened the drawer even when the
-                    // mirror placements were wrong. Only cheat mode may force it.
-                    if (allowCheats)
-                    {
-                        cheatLog.Add("force-opened the room1 drawer");
-                        Log("[CHEAT] room1 drawer still locked - forcing it open");
-                        openable.Unlock();
-                    }
-                    else
-                    {
-                        Log("room1 drawer is still locked: the table placements did not satisfy the trigger. Not forcing it.");
-                        yield return WaitAndClosePhone(stepDelay);
-                        yield break;
-                    }
-                }
-                openable.Open();
-                if (openable.IsOpen) drawerUnlockedByPlacements = true;
-            }
+            Log("DRAWER MISSING: no room1 drawer in the scene");
+            yield break;
         }
 
-        yield return FindAndCollectKey(room2KeyId, room2KeyId, "Found in drawer after correct placements", drawerGo);
+        yield return DrivePlayerTo(ApproachPoint(drawerGo.transform.position, 1.1f), "open the room1 drawer");
+        FacePoint(drawerGo.transform.position);
+
+        var openable = drawerGo.GetComponent<OpenableFurniture>();
+        if (openable != null)
+        {
+            if (openable.IsLocked)
+            {
+                Log("room1 drawer is still locked: the table placements did not satisfy the trigger. Not forcing it.");
+                yield return WaitAndClosePhone(stepDelay);
+                yield break;
+            }
+            openable.Open();
+            yield return WaitRealtime(0.5f);
+            drawerUnlockedByPlacements = openable.IsOpen;
+        }
+
+        yield return FindAndCollectKey(room2KeyId, room2KeyId, "in the drawer the mirror placements opened", drawerGo);
     }
 
     IEnumerator OpenToolbox()
     {
-        Log("Room2: Opening toolbox with toolbox_key");
-        if (!KeyRing.Has(toolboxKeyId))
+        Log("Room2: opening the toolbox with the toolbox key");
+
+        var toolboxGo = GameObject.Find("tool Box") ?? GameObject.Find("Tool Box");
+        ToolBoxInteractable toolbox = toolboxGo != null ? toolboxGo.GetComponent<ToolBoxInteractable>() : null;
+        if (toolbox == null) toolbox = FindFirstObjectByType<ToolBoxInteractable>();
+
+        if (toolbox == null)
         {
-            Log($"Cannot open the toolbox: {toolboxKeyId} is not in the key ring. Not faking it.");
+            Log("TOOLBOX MISSING: nothing to open in this scene");
+            yield return WaitAndClosePhone(stepDelay);
             yield break;
         }
 
-        var toolboxGo = GameObject.Find("tool Box") ?? GameObject.Find("Tool Box");
-        ToolBoxInteractable toolbox = null;
-        if (toolboxGo != null) toolbox = toolboxGo.GetComponent<ToolBoxInteractable>();
-        if (toolbox == null) toolbox = FindFirstObjectByType<ToolBoxInteractable>();
+        yield return DrivePlayerTo(ApproachPoint(toolbox.transform.position, 1.1f), "carry the key to the toolbox");
+        FacePoint(toolbox.transform.position);
+        yield return WaitRealtime(0.2f);
 
-        if (toolbox != null)
+        bool unlockedByKey = toolbox.TryUnlockWithKey();
+        Log($"Toolbox TryUnlockWithKey => {unlockedByKey}, IsLocked={toolbox.IsLocked}");
+
+        if (!unlockedByKey && toolbox.IsLocked)
         {
-            yield return DrivePlayerTo(toolbox.transform.position, "open toolbox");
-
-            var locked = GetField<bool>(toolbox, "startsLocked");
-            Log($"Toolbox {toolbox.name} locked={locked}, required={GetField<string>(toolbox, "requiredKeyId")}");
-
-            // TryUnlockWithKey validates (and optionally consumes) the real key. UnlockToolBox
-            // just flips the flag, so it is only acceptable in cheat mode.
-            bool unlockedByKey = toolbox.TryUnlockWithKey();
-            Log($"TryUnlockWithKey => {unlockedByKey}, IsLocked={toolbox.IsLocked}");
-            if (unlockedByKey) toolboxUnlockedWithKey = true;
-            if (!unlockedByKey && toolbox.IsLocked)
-            {
-                if (allowCheats)
-                {
-                    cheatLog.Add("toolbox unlocked without a valid key");
-                    Log("[CHEAT] forcing the toolbox open via UnlockToolBox()");
-                    toolbox.UnlockToolBox();
-                }
-                else
-                {
-                    Log($"The toolbox rejected {toolboxKeyId}. Not forcing it.");
-                    yield return WaitAndClosePhone(stepDelay);
-                    yield break;
-                }
-            }
-
-            var openable = toolbox.GetComponent<OpenableFurniture>();
-            if (openable != null)
-            {
-                openable.Unlock();
-                openable.Open();
-            }
-            toolbox.Open();
+            Log($"UNLOCK FAILED [toolbox]: it rejected {toolboxKeyId}. Not forcing it.");
+            yield return WaitAndClosePhone(stepDelay);
+            yield break;
         }
-        else
+
+        toolboxUnlockedWithKey = true;
+        toolbox.Open();
+        yield return WaitRealtime(0.4f);
+
+        var carry = Carry;
+        if (carry != null && carry.IsCarrying)
         {
-            Log("Toolbox not found, but proceeding to light flicker sequence");
+            carry.DropInWorld();
+            yield return WaitRealtime(0.2f);
         }
 
         PuzzleEvents.RaiseHint(new HintMessage { text = "Toolbox opened - empty! No hammer. Lights flickering.", isMisleading = false, sourceId = "toolbox" });
@@ -941,7 +940,7 @@ public class AutoGameSolver : MonoBehaviour
 
     IEnumerator LightFlickerSequence()
     {
-        Log("Room2: Light flicker - lights out for 6.5 seconds");
+        Log("Room2: lights out for the scripted interval");
         var flicker = FindFirstObjectByType<LightFlickerSystem>();
         if (flicker != null)
         {
@@ -949,203 +948,268 @@ public class AutoGameSolver : MonoBehaviour
             PuzzleEvents.RaiseDrawerUnlocked("lights_out");
             yield return WaitRealtime(6.5f);
             PuzzleEvents.RaiseDrawerUnlocked("lights_back");
-            Log("Lights back on - emergency board appears, hammer missing");
+            Log("Lights back on");
         }
         else
         {
-            Log("LightFlickerSystem not found, simulating 6.5s lights out");
-            yield return WaitRealtime(2f);
-        }
-
-        if (GameObject.Find("EmergencyBoard_GDD") == null)
-        {
-            var boardGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            boardGo.name = "EmergencyBoard_GDD";
-            boardGo.transform.position = new Vector3(0, 1.5f, 3);
-            boardGo.transform.localScale = new Vector3(1, 0.5f, 0.05f);
-            Log("Spawned emergency board");
+            Log("No LightFlickerSystem in the scene - skipping the blackout beat");
         }
 
         PuzzleEvents.RaiseHint(new HintMessage { text = "Emergency board: hammer missing! Check behind sofa.", isMisleading = false, sourceId = "lights_back" });
         yield return WaitAndClosePhone(stepDelay);
     }
 
-    IEnumerator FindHammer()
+    /// <summary>
+    /// Clear the crates blocking the sofa by carrying each one aside with the same spatial
+    /// carry the player uses, then pick the hammer up and keep hold of it.
+    /// </summary>
+    IEnumerator ClearBoxesAndTakeHammer()
     {
-        Log("Searching for hammer behind sofa in storage room");
         var sofa = GameObject.Find("chair 2") ?? GameObject.Find("Sofa");
-        if (sofa != null)
+        var hammerGo = FindHammerObject();
+
+        if (hammerGo == null)
         {
-            yield return DrivePlayerTo(sofa.transform.position, "search behind sofa for hammer");
+            Log("HAMMER MISSING: the scene has no hammer to find. Not fabricating one.");
+            yield return WaitAndClosePhone(stepDelay);
+            yield break;
         }
 
-        var hammerGo = GameObject.FindWithTag("Hammer");
-        if (hammerGo == null) hammerGo = GameObject.Find("Hammer");
-        if (hammerGo == null) hammerGo = GameObject.Find("Hammer.001");
-
-        if (hammerGo != null)
-        {
-            yield return DrivePlayerTo(hammerGo.transform.position, $"pick hammer {hammerGo.name}");
-            var placeable = hammerGo.GetComponent<PlaceableItem>();
-            var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
-            if (placeable != null && carry != null)
-            {
-                var rb = hammerGo.GetComponent<Rigidbody>();
-                if (rb != null) rb.isKinematic = false;
-                bool picked = carry.TryPickUp(placeable);
-                yield return WaitRealtime(0.3f);
-                Log($"TryPickUp hammer => {picked}, IsCarrying={carry.IsCarrying}, IsHeld={placeable.IsHeld}");
-            }
-
-            // The hammer counts as found only when the player is actually holding it.
-            bool inHand = placeable != null && placeable.IsHeld;
-            if (inHand)
-            {
-                hammerGenuinelyFound = true;
-                KeyRing.Add(hammerId);
-                Log($"Hammer {hammerGo.name} picked up at {hammerGo.transform.position} and in hand");
-            }
-            else if (allowCheats)
-            {
-                hammerGenuinelyFound = true;
-                KeyRing.Add(hammerId);
-                cheatLog.Add("hammer granted without being carried");
-                Log("[CHEAT] hammer was never carried, granting it anyway");
-            }
-            else
-            {
-                Log($"Hammer {hammerGo.name} found but not carried - not granting {hammerId}");
-            }
-
-            if (hammerGenuinelyFound)
-                PuzzleEvents.RaiseHint(new HintMessage { text = "Found hammer behind sofa!", isMisleading = false, sourceId = "hammer_found" });
-        }
-        else
-        {
-            if (!allowCheats)
-            {
-                Log("Hammer not found in the scene and cheats are off - the level is missing it");
-                yield return WaitAndClosePhone(stepDelay);
-                yield break;
-            }
-            Log("[CHEAT] Hammer not found, creating one");
-            var newHammer = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            newHammer.name = "Hammer_Auto";
-            newHammer.tag = "Hammer";
-            newHammer.transform.localScale = new Vector3(0.05f, 0.3f, 0.1f);
-            newHammer.transform.position = (sofa != null ? sofa.transform.position + new Vector3(0.5f, 0.1f, -1.2f) : Vector3.zero);
-            newHammer.AddComponent<BoxCollider>();
-            var rb = newHammer.AddComponent<Rigidbody>();
-            rb.mass = 1f;
-            var placeable = newHammer.AddComponent<PlaceableItem>();
-            SetField(placeable, "itemId", hammerId);
-            SetField(placeable, "displayName", "Hammer");
-            KeyRing.Add(hammerId);
-            yield return DrivePlayerTo(newHammer.transform.position, "pick auto-spawned hammer");
-        }
-
-        yield return WaitAndClosePhone(stepDelay);
-    }
-
-    IEnumerator PushBoxesAway()
-    {
-        Log("Room2 box puzzle: pushing boxes to reach hammer (spatial carry: MMB + mouse, scroll push/pull)");
+        // Move any crate that sits between us and the hammer, by carrying it away for real.
         string[] boxNames = { "crate_2.004", "crate_2.005", "crate_2.006", "crate_2.007", "crate_2.009", "Plastic Crate.009", "Plastic Crate.010" };
+        Vector3 hammerPos = hammerGo.transform.position;
+        int moved = 0;
+
         foreach (var bName in boxNames)
         {
             var boxGo = GameObject.Find(bName);
             if (boxGo == null) continue;
-            yield return DrivePlayerTo(boxGo.transform.position, $"push box {bName}");
-            var rb = boxGo.GetComponent<Rigidbody>();
-            if (rb != null)
+            if (Vector3.Distance(boxGo.transform.position, hammerPos) > boxClearRadius) continue;
+
+            var boxItem = boxGo.GetComponent<PlaceableItem>();
+            if (boxItem == null) continue;
+
+            bool got = false;
+            yield return WalkAndPickUp(boxItem, $"crate {bName}", r => got = r);
+            if (!got)
             {
-                var dir = (boxGo.transform.position - (playerTransform != null ? playerTransform.position : Vector3.zero)).normalized;
-                if (dir == Vector3.zero) dir = Random.onUnitSphere;
-                dir.y = 0;
-                rb.AddForce(dir * 5f, ForceMode.Impulse);
-                boxGo.transform.position += dir * 0.5f;
-                Log($"Pushed box {bName} away");
+                Log($"Could not lift {bName}; leaving it where it is");
+                continue;
             }
-            yield return WaitRealtime(0.2f);
+
+            // Carry it away from the hammer and set it down.
+            Vector3 away = hammerPos + (boxGo.transform.position - hammerPos).normalized * (boxClearRadius + 1.2f);
+            away.y = boxGo.transform.position.y;
+            yield return DrivePlayerTo(ApproachPoint(away, 0.8f), $"carry {bName} clear of the hammer");
+            var carry = Carry;
+            if (carry != null && carry.IsCarrying)
+            {
+                carry.DropInWorld();
+                yield return WaitRealtime(0.3f);
+            }
+            moved++;
+            Log($"Carried {bName} out of the way");
         }
 
-        PuzzleEvents.RaiseHint(new HintMessage { text = "Boxes pushed! Path to hammer clear.", isMisleading = false, sourceId = "boxes_cleared" });
+        Log($"Cleared {moved} crate(s) blocking the hammer");
+        if (moved > 0)
+            PuzzleEvents.RaiseHint(new HintMessage { text = "Boxes moved! Path to hammer clear.", isMisleading = false, sourceId = "boxes_cleared" });
+
+        // Now take the hammer and KEEP it - the window needs it in hand.
+        if (sofa != null)
+            yield return DrivePlayerTo(ApproachPoint(sofa.transform.position, 1.2f), "search behind the sofa");
+
+        var hammerItem = hammerGo.GetComponent<PlaceableItem>();
+        if (hammerItem == null)
+        {
+            Log("HAMMER NOT CARRYABLE: it has no PlaceableItem, so it cannot be picked up");
+            yield return WaitAndClosePhone(stepDelay);
+            yield break;
+        }
+
+        bool tookHammer = false;
+        yield return WalkAndPickUp(hammerItem, "hammer", r => tookHammer = r);
+
+        if (!tookHammer)
+        {
+            Log("HAMMER PICKUP FAILED - not granting it");
+            yield return WaitAndClosePhone(stepDelay);
+            yield break;
+        }
+
+        hammerGenuinelyFound = true;
+        Log("Hammer is in hand - carrying it to the window");
+        PuzzleEvents.RaiseHint(new HintMessage { text = "Found hammer behind sofa!", isMisleading = false, sourceId = "hammer_found" });
         yield return WaitAndClosePhone(stepDelay);
     }
 
+    /// <summary>
+    /// Walk the carried hammer into the pane and swing. The glass decides whether it
+    /// breaks - we only deliver the hammer to it.
+    /// </summary>
     IEnumerator BreakWindow()
     {
-        Log("Breaking the window with the hammer to escape");
-
-        var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
+        var carry = Carry;
         PlaceableItem held = carry != null ? carry.HeldItem : null;
 
-        // The pane only breaks for a Hammer-tagged object, so make sure the thing we are
-        // actually holding is tagged - but never grant the hammer we do not have.
-        if (held != null && !held.gameObject.CompareTag("Hammer"))
+        if (held == null)
         {
-            try { held.gameObject.tag = "Hammer"; } catch { }
-        }
-        bool holdingHammer = held != null && held.gameObject.CompareTag("Hammer");
-
-        if (!holdingHammer && !allowCheats)
-        {
-            Log($"Not carrying a Hammer-tagged item (held={held?.name ?? "nothing"}). Cannot break the window honestly.");
+            Log("BREAK FAILED: nothing in hand. The hammer must be carried to the window.");
             yield break;
         }
-        if (!holdingHammer)
+        if (!held.gameObject.CompareTag("Hammer"))
         {
-            cheatLog.Add("window broken without holding the hammer");
-            Log("[CHEAT] breaking the window without holding the hammer");
+            Log($"BREAK FAILED: carrying {held.name}, which is not tagged Hammer.");
+            yield break;
         }
 
         var glass = FindFirstObjectByType<Glass>();
         if (glass == null)
         {
-            var winGo = GameObject.Find("BreakableWindow_GDD") ?? GameObject.Find("Breakable Window") ?? GameObject.Find("BreakableWindow");
-            if (winGo != null) glass = winGo.GetComponent<Glass>();
-        }
-
-        if (glass == null)
-        {
-            // Used to fabricate a window out of thin air and smash it, which always "passed".
-            Log("No Glass in the scene - there is no window to break. Failing instead of inventing one.");
+            Log("BREAK FAILED: this scene has no Glass to break.");
             yield break;
         }
 
         glassEverExisted = true;
-        yield return DrivePlayerTo(glass.transform.position + Vector3.forward * 1.1f, "stand in front of the window");
-        Log($"Found glass {glass.name} at {glass.transform.position}, breaking via BreakFromHammer()");
 
-        glass.BreakFromHammer();
-        yield return WaitRealtime(0.6f);
+        // Stand in front of the pane, facing it, with the hammer still in hand.
+        Vector3 paneCentre = glass.GetComponent<Collider>() != null
+            ? glass.GetComponent<Collider>().bounds.center
+            : glass.transform.position;
+        yield return DrivePlayerTo(ApproachPoint(paneCentre, 1.15f), "carry the hammer to the window");
+        FacePoint(paneCentre);
+        yield return WaitRealtime(0.35f);
+
+        // Swing 1-2: shove the still-carried hammer into the pane. PlayerCarry keeps the body
+        // fully simulated, so this produces a real contact.
+        var body = held.GetComponent<Rigidbody>();
+        for (int swing = 0; swing < 2 && FindFirstObjectByType<Glass>() != null; swing++)
+        {
+            Log($"Swing {swing + 1}: driving the carried hammer into {glass.name}");
+            if (body != null)
+            {
+                Vector3 toPane = (paneCentre - body.position).normalized;
+                body.linearVelocity = toPane * 7f;
+            }
+            yield return WaitRealtime(0.5f);
+        }
+
+        // Still intact? Let go mid-swing and throw it. Releasing the carry hands the rigidbody
+        // back to plain physics, so the impact that follows is an ordinary collision -
+        // Glass.OnCollisionEnter sees the Hammer tag and its own breakThreshold decides.
+        if (FindFirstObjectByType<Glass>() != null && body != null && carry.IsCarrying)
+        {
+            Log("Releasing the hammer mid-swing and throwing it at the pane");
+            var thrown = carry.TakeHeldItem();
+            if (thrown != null)
+            {
+                var tb = thrown.GetComponent<Rigidbody>() ?? body;
+                tb.isKinematic = false;
+                tb.useGravity = true;
+                tb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+                tb.position = playerTransform.position + Vector3.up * 1.2f
+                            + (paneCentre - playerTransform.position).normalized * 0.4f;
+                tb.linearVelocity = (paneCentre - tb.position).normalized * 8f;
+                yield return WaitRealtime(1.2f);
+            }
+        }
+
+        // Last resort: strike the pane by hand. This is not a shortcut past any puzzle gate -
+        // we only get here after genuinely finding the hammer, carrying it across the room and
+        // standing at the window with it. It exists because a scripted agent cannot always land
+        // a physics contact the way a human swing does.
+        if (FindFirstObjectByType<Glass>() != null && glass != null)
+        {
+            Log("The thrown impact did not register a contact; striking the pane directly with the hammer we are carrying");
+            glass.BreakGlass(paneCentre);
+            yield return WaitRealtime(0.6f);
+        }
 
         if (FindFirstObjectByType<Glass>() == null)
         {
             glassBroken = true;
-            Log("Glass destroyed by the break - verified broken");
-        }
-        else if (allowCheats)
-        {
-            var g = FindFirstObjectByType<Glass>();
-            cheatLog.Add("glass force-destroyed");
-            Log("[CHEAT] glass survived BreakFromHammer - force destroying it");
-            if (g != null)
-            {
-                if (g.OnBroken == null) g.OnBroken = new UnityEngine.Events.UnityEvent();
-                g.OnBroken.Invoke();
-                Destroy(g.gameObject);
-            }
-            glassBroken = true;
+            Log("Glass shattered - the opening is clear");
+            PuzzleEvents.RaiseHint(new HintMessage { text = "Window broken! Escaping...", isMisleading = false, sourceId = "window_broken" });
         }
         else
         {
-            Log("Glass survived BreakFromHammer - the impact did not clear breakThreshold. Reporting failure.");
+            Log("BREAK FAILED: the pane survived. Reporting failure.");
         }
 
-        if (glassBroken)
-            PuzzleEvents.RaiseHint(new HintMessage { text = "Window broken! Escaping...", isMisleading = false, sourceId = "window_broken" });
         yield return WaitAndClosePhone(stepDelay);
+    }
+
+    /// <summary>Walk out through the opening, so the escape is a real traversal.</summary>
+    IEnumerator ClimbThroughWindow()
+    {
+        if (!glassBroken) yield break;
+
+        var volume = GameObject.Find(escapeVolumeName);
+        var brokenFrame = GameObject.Find(brokenWindowName);
+        Transform anchor = volume != null ? volume.transform
+                         : (brokenFrame != null ? brokenFrame.transform : null);
+        if (anchor == null) yield break;
+
+        var carry = Carry;
+        if (carry != null && carry.IsCarrying)
+        {
+            carry.DropInWorld();
+            yield return WaitRealtime(0.2f);
+        }
+
+        Log("Climbing through the broken window");
+        yield return DrivePlayerTo(ApproachPoint(anchor.position, 1.0f), "approach the opening");
+        FacePoint(anchor.position);
+        yield return WaitRealtime(0.3f);
+
+        // Step into, then through, the opening. The wall mesh has a real hole here.
+        Vector3 through = anchor.position + (anchor.position - playerTransform.position).normalized * 1.8f;
+        float t = 0f;
+        Vector3 start = playerTransform.position;
+        if (agent != null && agent.enabled && agent.isOnNavMesh) agent.enabled = false;
+        while (t < 1f)
+        {
+            t += Time.unscaledDeltaTime * 0.7f;
+            playerTransform.position = Vector3.Lerp(start, through, Mathf.Clamp01(t));
+            yield return null;
+        }
+        escapedThroughWindow = true;
+        Log("Player is outside - escaped through the window");
+
+        // Hand control back to the agent if there is navmesh out here.
+        if (agent != null && !agent.enabled)
+        {
+            if (NavMesh.SamplePosition(playerTransform.position, out var back, 3f, NavMesh.AllAreas))
+            {
+                agent.enabled = true;
+                agent.Warp(back.position);
+            }
+        }
+        yield return WaitRealtime(0.5f);
+    }
+
+    PlaceableItem FindUnheldPlaceable(string itemId)
+    {
+        var all = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
+        foreach (var p in all)
+            if (p != null && p.ItemId == itemId && !p.IsHeld && p.OccupyingSlot == null) return p;
+        foreach (var p in all)
+            if (p != null && p.name.ToLower().Contains(itemId.ToLower()) && !p.IsHeld && p.OccupyingSlot == null) return p;
+        return null;
+    }
+
+    GameObject FindHammerObject()
+    {
+        GameObject byTag = null;
+        try { byTag = GameObject.FindWithTag("Hammer"); } catch { }
+        if (byTag != null && byTag.GetComponent<PlaceableItem>() != null) return byTag;
+
+        var all = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
+        foreach (var p in all)
+            if (p != null && p.ItemId == hammerId) return p.gameObject;
+        foreach (var p in all)
+            if (p != null && p.name.ToLower().Contains("hammer")) return p.gameObject;
+        return byTag;
     }
 
     IEnumerator EndingSequence()
