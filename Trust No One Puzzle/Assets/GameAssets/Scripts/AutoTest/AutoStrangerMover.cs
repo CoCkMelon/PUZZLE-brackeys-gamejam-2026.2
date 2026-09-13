@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.AI;
+using GameAssets.Scripts.UI.Mobile;
 
 /// <summary>
 /// Automatically moves stranger/ghost NPC via NavMesh for testing.
@@ -33,8 +34,6 @@ public class AutoStrangerMover : MonoBehaviour
         _agent.speed = walkSpeed;
         _agent.angularSpeed = 180f;
         _agent.stoppingDistance = reachDistance;
-
-        // Disable any manual controllers on stranger
         var ccs = GetComponents<CharacterController>();
         foreach (var cc in ccs) cc.enabled = false;
     }
@@ -43,7 +42,6 @@ public class AutoStrangerMover : MonoBehaviour
     {
         if (NavMesh.SamplePosition(transform.position, out var hit, 5f, NavMesh.AllAreas))
             _agent.Warp(hit.position);
-
         StartTour();
     }
 
@@ -53,25 +51,18 @@ public class AutoStrangerMover : MonoBehaviour
         _hasDisappeared = false;
         _index = 0;
         if (tourWaypoints != null && tourWaypoints.Length > 0 && tourWaypoints[0] != null)
-        {
             SetDest(tourWaypoints[0].position);
-        }
         else
         {
-            // Auto-find some points: entrance, mirror, etc.
             var triggers = FindObjectsByType<PhoneMessageTrigger>(FindObjectsSortMode.None);
-            if (triggers.Length > 0)
-            {
-                SetDest(triggers[0].transform.position);
-            }
+            if (triggers.Length > 0) SetDest(triggers[0].transform.position);
         }
     }
 
     private void SetDest(Vector3 pos)
     {
         if (!_agent.isOnNavMesh) return;
-        if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas))
-            pos = hit.position;
+        if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas)) pos = hit.position;
         _agent.SetDestination(pos);
     }
 
@@ -79,7 +70,6 @@ public class AutoStrangerMover : MonoBehaviour
     {
         if (!_isTouring || _hasDisappeared) return;
         if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
-
         if (!_agent.isOnNavMesh) return;
 
         if (!_agent.pathPending && _agent.remainingDistance <= reachDistance + 0.2f)
@@ -95,20 +85,14 @@ public class AutoStrangerMover : MonoBehaviour
                 if (bathroomMirrorLocation != null && _index == (tourWaypoints?.Length ?? 0))
                 {
                     SetDest(bathroomMirrorLocation.position);
-                    _index = -1; // will disappear next
+                    _index = -1;
                 }
                 else if (_index == -1 && bathroomMirrorLocation != null)
-                {
                     Disappear();
-                }
                 else if (tourWaypoints == null || tourWaypoints.Length == 0)
-                {
-                    // No waypoints, just disappear after tour
                     Disappear();
-                }
             }
         }
-
         if (_index == -1 && bathroomMirrorLocation != null && !_agent.pathPending && _agent.remainingDistance <= reachDistance + 0.5f)
             Disappear();
     }

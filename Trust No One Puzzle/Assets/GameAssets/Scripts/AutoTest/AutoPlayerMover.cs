@@ -3,7 +3,9 @@ using UnityEngine.AI;
 using GameAssets.Scripts.Interaction;
 using GameAssets.Scripts.Puzzle;
 using GameAssets.Scripts.Environment;
+using GameAssets.Scripts.Entities;
 using GameAssets.Scripts.Entities.Player;
+using GameAssets.Scripts.UI.Mobile;
 
 /// <summary>
 /// Fully automatic player for AutoTest scenes.
@@ -78,46 +80,26 @@ public class AutoPlayerMover : MonoBehaviour
 
     private void OnEnable()
     {
-        // Ensure cursor unlocked for auto
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
     }
 
     private void Start()
     {
-        // Warp to NavMesh if not on it
         if (NavMesh.SamplePosition(transform.position, out var hit, 5f, NavMesh.AllAreas))
         {
             _agent.Warp(hit.position);
         }
-
         if (autoStart) StartAuto();
     }
 
     private void DisableManualControllers()
     {
-        if (_charController != null)
-        {
-            _charController.enabled = false;
-            Debug.Log("[AutoPlayerMover] Disabled CharacterController for auto");
-        }
-        if (_playerController != null)
-        {
-            _playerController.enabled = false;
-            Debug.Log("[AutoPlayerMover] Disabled PlayerController for auto");
-        }
-        if (_fppCamera != null)
-        {
-            _fppCamera.enabled = false;
-            Debug.Log("[AutoPlayerMover] Disabled FPPCameraController for auto");
-        }
-        if (_playerInteraction != null)
-        {
-            _playerInteraction.enabled = false;
-            Debug.Log("[AutoPlayerMover] Disabled PlayerInteraction for auto");
-        }
+        if (_charController != null) _charController.enabled = false;
+        if (_playerController != null) _playerController.enabled = false;
+        if (_fppCamera != null) _fppCamera.enabled = false;
+        if (_playerInteraction != null) _playerInteraction.enabled = false;
 
-        // Also disable any other PlayerController in children
         var pcs = GetComponentsInChildren<PlayerController>();
         foreach (var pc in pcs) pc.enabled = false;
         var fpcs = GetComponentsInChildren<FPPCameraController>();
@@ -134,7 +116,6 @@ public class AutoPlayerMover : MonoBehaviour
         _waitTimer = 0f;
         _actionTimer = 0f;
 
-        // Try to bake navmesh first via manager
         var baker = FindFirstObjectByType<NavMeshAutoBaker>();
         baker?.TryBake();
 
@@ -155,11 +136,9 @@ public class AutoPlayerMover : MonoBehaviour
     private void Update()
     {
         if (!_isRunning) return;
-
         if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
         if (_actionTimer > 0) { _actionTimer -= Time.deltaTime; }
 
-        // If agent not on navmesh, try to warp
         if (!_agent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out var hit, 10f, NavMesh.AllAreas))
@@ -167,16 +146,13 @@ public class AutoPlayerMover : MonoBehaviour
             return;
         }
 
-        // Check if reached destination
         if (!_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.3f)
         {
-            // Try to interact with nearby puzzle objects
             if (_actionTimer <= 0f)
             {
                 bool didAction = TryAutoInteract();
                 if (didAction) _actionTimer = actionCooldown;
             }
-
             _waitTimer = waitAtWaypoint;
             SetNextPuzzleDestination();
         }
@@ -185,24 +161,18 @@ public class AutoPlayerMover : MonoBehaviour
     private void SetNextPuzzleDestination()
     {
         Transform next = FindNextPuzzleTarget();
-        if (next != null)
-        {
-            SetDestination(next.position);
-        }
+        if (next != null) SetDestination(next.position);
         else if (waypoints != null && waypoints.Length > 0)
         {
             _currentIndex = (_currentIndex + 1) % waypoints.Length;
-            if (waypoints[_currentIndex] != null)
-                SetDestination(waypoints[_currentIndex].position);
+            if (waypoints[_currentIndex] != null) SetDestination(waypoints[_currentIndex].position);
         }
     }
 
     private void SetDestination(Vector3 pos)
     {
         if (!_agent.isOnNavMesh) return;
-        // Clamp to NavMesh
-        if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas))
-            pos = hit.position;
+        if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas)) pos = hit.position;
         _agent.SetDestination(pos);
     }
 
@@ -211,7 +181,6 @@ public class AutoPlayerMover : MonoBehaviour
         var carry = PlayerCarry.Instance;
         bool isCarrying = carry != null && carry.IsCarrying;
 
-        // If carrying, go to correct slot
         if (isCarrying && carry.HeldItem != null)
         {
             var heldId = carry.HeldItem.ItemId;
@@ -226,7 +195,6 @@ public class AutoPlayerMover : MonoBehaviour
                 if (d < bestDist) { bestDist = d; bestSlot = slot; }
             }
             if (bestSlot != null) return bestSlot.transform;
-            // If no correct slot, try any empty slot
             foreach (var slot in slots)
             {
                 if (slot.IsOccupied) continue;
@@ -236,7 +204,6 @@ public class AutoPlayerMover : MonoBehaviour
             if (bestSlot != null) return bestSlot.transform;
         }
 
-        // If not carrying, find closest needed item
         if (!isCarrying && autoPickup)
         {
             var items = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
@@ -246,15 +213,10 @@ public class AutoPlayerMover : MonoBehaviour
             {
                 if (item.IsHeld) continue;
                 if (item.OccupyingSlot != null && item.OccupyingSlot.IsCorrectlyFilled) continue;
-                // Check if item is needed somewhere
                 bool needed = false;
                 var slots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
-                foreach (var s in slots)
-                {
-                    if (!s.IsOccupied && s.RequiredItemId == item.ItemId) { needed = true; break; }
-                }
-                if (!needed && mode == TestMode.FullGameAuto) needed = true; // try all in full auto
-
+                foreach (var s in slots) { if (!s.IsOccupied && s.RequiredItemId == item.ItemId) { needed = true; break; } }
+                if (!needed && mode == TestMode.FullGameAuto) needed = true;
                 if (!needed) continue;
                 float d = Vector3.Distance(transform.position, item.transform.position);
                 if (d < bestDist && d < 20f) { bestDist = d; closest = item; }
@@ -262,7 +224,6 @@ public class AutoPlayerMover : MonoBehaviour
             if (closest != null) return closest.transform;
         }
 
-        // Find closest closed/locked furniture that needs opening
         if (autoOpen)
         {
             var furnitures = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
@@ -276,7 +237,6 @@ public class AutoPlayerMover : MonoBehaviour
             }
             if (closestF != null) return closestF.transform;
 
-            // Toolbox
             var toolboxes = FindObjectsByType<ToolBoxInteractable>(FindObjectsSortMode.None);
             foreach (var tb in toolboxes)
             {
@@ -286,7 +246,6 @@ public class AutoPlayerMover : MonoBehaviour
             }
         }
 
-        // Hammer -> window logic
         if (autoBreakWindow)
         {
             bool hasHammer = false;
@@ -295,7 +254,6 @@ public class AutoPlayerMover : MonoBehaviour
                 if (carry.HeldItem != null && carry.HeldItem.ItemId.ToLower().Contains("hammer")) hasHammer = true;
                 if (carry.HeldInteractable != null && carry.HeldInteractable.name.ToLower().Contains("hammer")) hasHammer = true;
             }
-            // Also check if hammer is in scene and we should get it
             if (!hasHammer)
             {
                 var hammerItems = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
@@ -307,7 +265,6 @@ public class AutoPlayerMover : MonoBehaviour
                         if (d < 20f) return h.transform;
                     }
                 }
-                // Also Interactable hammer
                 var hammerInt = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
                 foreach (var hi in hammerInt)
                 {
@@ -320,7 +277,6 @@ public class AutoPlayerMover : MonoBehaviour
             }
             else
             {
-                // Has hammer, go to window/glass
                 var glasses = FindObjectsByType<Glass>(FindObjectsSortMode.None);
                 Glass closestG = null;
                 float bestDist = float.MaxValue;
@@ -334,7 +290,6 @@ public class AutoPlayerMover : MonoBehaviour
             }
         }
 
-        // Fallback to preset locations in order
         if (mode == TestMode.FullGameAuto || mode == TestMode.AutoPuzzleRoom1)
         {
             if (_currentIndex == 0 && mirrorKeyLocation != null) { _currentIndex++; return mirrorKeyLocation; }
@@ -353,7 +308,6 @@ public class AutoPlayerMover : MonoBehaviour
             if (_currentIndex == 3 && windowLocation != null) { _currentIndex++; return windowLocation; }
         }
 
-        // Phone triggers as exploration
         var triggers = FindObjectsByType<PhoneMessageTrigger>(FindObjectsSortMode.None);
         if (triggers.Length > 0)
         {
@@ -404,14 +358,12 @@ public class AutoPlayerMover : MonoBehaviour
             return true;
         }
 
-        // Interactable version
         var inters = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
         Interactable closestI = null;
         bestDist = float.MaxValue;
         foreach (var inter in inters)
         {
             if (inter == null) continue;
-            // Skip if it's furniture
             if (inter.GetComponent<OpenableFurniture>() != null) continue;
             if (inter.GetComponent<ToolBoxInteractable>() != null) continue;
             float d = Vector3.Distance(transform.position, inter.transform.position);
@@ -420,7 +372,6 @@ public class AutoPlayerMover : MonoBehaviour
         if (closestI != null)
         {
             Debug.Log($"[AutoPlayerMover] Auto pickup Interactable {closestI.name}");
-            // Try via PlayerCarry
             var pc = PlayerCarry.Instance;
             if (pc != null) pc.TryPickUp(closestI);
             else closestI.GetComponent<IInteractable>()?.OnInteract();
@@ -458,35 +409,18 @@ public class AutoPlayerMover : MonoBehaviour
     {
         if (!autoOpen) return false;
 
-        // OpenableFurniture
         var furnitures = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
         foreach (var f in furnitures)
         {
             float d = Vector3.Distance(transform.position, f.transform.position);
             if (d < interactRange)
             {
-                // Try to unlock with key if needed
-                if (f.IsLocked)
-                {
-                    // Try key from KeyRing or held
-                    if (f.GetComponent<ToolBoxInteractable>() == null)
-                    {
-                        // Try to find key
-                        var keyItems = FindObjectsByType<KeyItem>(FindObjectsSortMode.None);
-                        foreach (var k in keyItems)
-                        {
-                            if (Vector3.Distance(transform.position, k.transform.position) < 1f) continue;
-                            // If player has key, furniture will unlock on interact
-                        }
-                    }
-                }
                 Debug.Log($"[AutoPlayerMover] Auto interact furniture {f.name} locked={f.IsLocked} open={f.IsOpen}");
                 f.Interact();
                 return true;
             }
         }
 
-        // Toolbox
         var toolboxes = FindObjectsByType<ToolBoxInteractable>(FindObjectsSortMode.None);
         foreach (var tb in toolboxes)
         {
@@ -511,19 +445,9 @@ public class AutoPlayerMover : MonoBehaviour
             float d = Vector3.Distance(transform.position, g.transform.position);
             if (d < interactRange + 1f)
             {
-                var carry = PlayerCarry.Instance;
-                bool hasHammer = false;
-                if (carry != null && carry.IsCarrying)
-                {
-                    if (carry.HeldItem != null && (carry.HeldItem.ItemId.ToLower().Contains("hammer") || carry.HeldItem.name.ToLower().Contains("hammer"))) hasHammer = true;
-                    if (carry.HeldInteractable != null && carry.HeldInteractable.name.ToLower().Contains("hammer")) hasHammer = true;
-                }
-                if (hasHammer || true) // try anyway, Glass checks tag
-                {
-                    Debug.Log($"[AutoPlayerMover] Auto break glass {g.name}");
-                    g.BreakFromHammer();
-                    return true;
-                }
+                Debug.Log($"[AutoPlayerMover] Auto break glass {g.name}");
+                g.BreakFromHammer();
+                return true;
             }
         }
         return false;
@@ -540,7 +464,6 @@ public class AutoPlayerMover : MonoBehaviour
             if (mb is IInteractable inter)
             {
                 if (!inter.CanInteract) continue;
-                // Skip already handled types
                 if (mb is PlacementSlot) continue;
                 if (mb is PlaceableItem) continue;
                 if (mb is OpenableFurniture) continue;

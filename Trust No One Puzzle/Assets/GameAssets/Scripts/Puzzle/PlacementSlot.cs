@@ -19,6 +19,7 @@ namespace GameAssets.Scripts.Puzzle
 
         [Header("Snap")]
         [SerializeField] private Transform snapPoint;
+        [Tooltip("If false, only the correct item can be placed - wrong items are rejected.")]
         [SerializeField] private bool allowWrongItems = true;
         [SerializeField] private bool lockWhenCorrect = true;
 
@@ -27,6 +28,7 @@ namespace GameAssets.Scripts.Puzzle
         public UnityEvent<PlaceableItem> OnWrongPlacement;
         public UnityEvent<PlaceableItem> OnItemRemoved;
         public UnityEvent OnSlotSolved;
+        public UnityEvent<PlaceableItem> OnWrongItemRejected;
 
         public string SlotId => slotId;
         public string RequiredItemId => requiredItemId;
@@ -34,6 +36,7 @@ namespace GameAssets.Scripts.Puzzle
         public PlaceableItem Occupant { get; private set; }
         public bool IsCorrectlyFilled => Occupant != null && Occupant.ItemId == requiredItemId;
         public bool IsOccupied => Occupant != null;
+        public bool AllowWrongItems => allowWrongItems;
 
         public string InteractionPrompt
         {
@@ -42,8 +45,10 @@ namespace GameAssets.Scripts.Puzzle
                 var carry = PlayerCarry.Instance;
                 if (carry != null && carry.IsCarrying)
                 {
-                    if (IsOccupied)
-                        return "Slot occupied";
+                    if (IsOccupied) return "Slot occupied";
+                    // If wrong items not allowed, show hint
+                    if (!allowWrongItems && carry.HeldItem.ItemId != requiredItemId)
+                        return $"Wrong item - needs {requiredItemId}";
                     return $"Press [E] to Place {carry.HeldItem.DisplayName}";
                 }
 
@@ -60,7 +65,12 @@ namespace GameAssets.Scripts.Puzzle
             {
                 var carry = PlayerCarry.Instance;
                 if (carry != null && carry.IsCarrying)
-                    return !IsOccupied;
+                {
+                    if (IsOccupied) return false;
+                    // If wrong items not allowed, only allow correct item
+                    if (!allowWrongItems && carry.HeldItem.ItemId != requiredItemId) return false;
+                    return true;
+                }
                 if (IsOccupied && !(lockWhenCorrect && IsCorrectlyFilled))
                     return true;
                 return false;
@@ -70,11 +80,18 @@ namespace GameAssets.Scripts.Puzzle
         public void OnInteract()
         {
             var carry = PlayerCarry.Instance;
-            if (carry == null)
-                return;
+            if (carry == null) return;
 
             if (carry.IsCarrying && !IsOccupied)
             {
+                var held = carry.HeldItem;
+                // Check allowWrongItems
+                if (!allowWrongItems && held.ItemId != requiredItemId)
+                {
+                    OnWrongItemRejected?.Invoke(held);
+                    Debug.Log($"[PlacementSlot] {slotId}: rejected wrong item {held.ItemId}, needs {requiredItemId}");
+                    return;
+                }
                 TryPlace(carry.TakeHeldItem());
                 return;
             }
@@ -92,8 +109,15 @@ namespace GameAssets.Scripts.Puzzle
 
         public bool TryPlace(PlaceableItem item)
         {
-            if (item == null || IsOccupied)
+            if (item == null || IsOccupied) return false;
+
+            // Enforce allowWrongItems
+            if (!allowWrongItems && item.ItemId != requiredItemId)
+            {
+                OnWrongItemRejected?.Invoke(item);
+                Debug.LogWarning($"[PlacementSlot] {slotId}: TryPlace rejected {item.ItemId}, allowWrongItems=false");
                 return false;
+            }
 
             Occupant = item;
             item.SnapToSlot(this);
