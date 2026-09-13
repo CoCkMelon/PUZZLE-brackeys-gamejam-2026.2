@@ -492,22 +492,31 @@ public class GDDPuzzleBootstrap : MonoBehaviour
 
     void HideObjectsInsideCabinet(GameObject cabinetGo)
     {
-        // Find book/candle/vase and move them inside cabinet, inactive until cabinet opened
+        // Find book/candle/vase and move them inside cabinet - VISIBLE but inside for solvability
+        // Previously disabled renderer which made it look like nothing was carried
         string[] objNames = { "Puzzle book", "Puzzle book (1)", "Candle_low", "Candle_low (1)", "Vase", "Vase (1)" };
         foreach (var n in objNames)
         {
             var go = GameObject.Find(n);
             if (go == null) continue;
-            // If not already hidden, parent to cabinet and position inside
+            var placeable = go.GetComponent<PlaceableItem>();
+            if (placeable == null) placeable = go.AddComponent<PlaceableItem>();
+            // Keep inside cabinet but visible through open door - don't disable renderer, just position inside
             if (go.transform.parent != cabinetGo.transform)
             {
                 go.transform.SetParent(cabinetGo.transform);
-                go.transform.localPosition = new Vector3(Random.Range(-0.2f, 0.2f), 0.1f, Random.Range(-0.1f, 0.1f));
+                go.transform.localPosition = new Vector3(Random.Range(-0.25f, 0.25f), 0.2f + Random.Range(0, 0.3f), Random.Range(-0.15f, 0.15f));
+                go.transform.localRotation = Quaternion.identity;
             }
-            // Don't deactivate completely, just make less visible - but for solvability, keep active but inside
-            // We'll hide via renderer disable until opened
             var rend = go.GetComponent<Renderer>();
-            if (rend != null) rend.enabled = false;
+            if (rend != null) rend.enabled = true; // KEEP VISIBLE so player sees something was inside
+            // Ensure collider and rigidbody for pickup
+            if (go.GetComponent<Collider>() == null) go.AddComponent<BoxCollider>();
+            var rb = go.GetComponent<Rigidbody>();
+            if (rb == null) rb = go.AddComponent<Rigidbody>();
+            rb.mass = 0.8f;
+            rb.isKinematic = true; // stay inside until cabinet opened
+            Log($"Cabinet content {go.name} placed inside {cabinetGo.name} at {go.transform.localPosition} - visible for solvability");
         }
     }
 
@@ -520,13 +529,27 @@ public class GDDPuzzleBootstrap : MonoBehaviour
             if (go == null) continue;
             var rend = go.GetComponent<Renderer>();
             if (rend != null) rend.enabled = true;
-            // Move to near cabinet front
+            // Move to near cabinet front - VISIBLE carry
             go.transform.SetParent(null);
-            go.transform.position = cabinetGo.transform.position + new Vector3(Random.Range(-0.5f, 0.5f), 0.3f, 1f);
+            Vector3 frontPos = cabinetGo.transform.position + cabinetGo.transform.forward * 0.8f + new Vector3(Random.Range(-0.4f, 0.4f), 0.4f, Random.Range(-0.2f, 0.2f));
+            // Sample NavMesh for reachable
+            if (UnityEngine.AI.NavMesh.SamplePosition(frontPos, out var hit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+                frontPos = hit.position;
+            go.transform.position = frontPos;
             var rb = go.GetComponent<Rigidbody>();
-            if (rb != null) rb.WakeUp();
+            if (rb != null)
+            {
+                rb.isKinematic = false;
+                rb.WakeUp();
+                rb.AddForce(Vector3.up * 0.5f, ForceMode.Impulse);
+            }
+            // Ensure PlaceableItem for pickup
+            var placeable = go.GetComponent<PlaceableItem>();
+            if (placeable == null) placeable = go.AddComponent<PlaceableItem>();
+            SetField(placeable, "itemId", go.name.ToLower().Contains("book") ? "book" : go.name.ToLower().Contains("candle") ? "candle" : "vase");
+            Log($"Revealed {go.name} at {frontPos} - now carryable");
         }
-        Log("Cabinet contents revealed: Book, Candle, Vase");
+        Log("Cabinet contents revealed: Book, Candle, Vase - now visible and carryable (fix 'nothing actually was carried')");
     }
 
     void SetupPlaceable_GDD(string goName, string itemId, string displayName, bool isPrimary)
@@ -902,66 +925,205 @@ public class GDDPuzzleBootstrap : MonoBehaviour
 
     void SetupEnding_GDD()
     {
-        var glass = FindFirstObjectByType<Glass>();
-        if (glass == null)
+        Log("--- Ending GDD Assembly: window on wall with hole, glass material, fracture ---");
+
+        // Try to find existing window or wall to place window on
+        var outerWall = GameObject.Find("Outer Wall 1") ?? GameObject.Find("Outer Wall 2") ?? GameObject.Find("Room Wall (1)") ?? GameObject.Find("Walls") ?? GameObject.Find("Room 2 walls");
+        var existingGlass = FindFirstObjectByType<Glass>();
+        GameObject windowGo = null;
+        Glass glass = null;
+
+        if (existingGlass != null)
         {
-            var winGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            winGo.name = "BreakableWindow_GDD";
-            winGo.transform.position = new Vector3(5, 1, 0);
-            winGo.transform.localScale = new Vector3(0.1f, 2, 2);
-            var col = winGo.GetComponent<BoxCollider>();
-            if (col != null) Destroy(col);
-            winGo.AddComponent<BoxCollider>();
-            glass = winGo.AddComponent<Glass>();
-            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
-            var broken = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            broken.name = "BrokenWindow_GDD";
-            broken.transform.position = winGo.transform.position;
-            broken.transform.localScale = new Vector3(0.1f, 2, 2);
-            var mr = broken.GetComponent<Renderer>();
-            if (mr != null) mr.material.color = Color.gray;
-            broken.SetActive(false);
-            SetField(glass, "brokenWindow", broken);
-            SetField(glass, "breakThreshold", 2f);
-            SetField(glass, "requiredTag", "Hammer");
-            Log("Created BreakableWindow_GDD with Glass");
+            windowGo = existingGlass.gameObject;
+            glass = existingGlass;
+            Log($"Found existing Glass {windowGo.name} at {windowGo.transform.position}");
         }
         else
         {
-            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
-            // Ensure collider exists
-            if (glass.GetComponent<Collider>() == null) glass.gameObject.AddComponent<BoxCollider>();
-            SetField(glass, "breakThreshold", 2f);
-            SetField(glass, "requiredTag", "Hammer");
-        }
-
-        var brokenField = typeof(Glass).GetField("brokenWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        if (brokenField != null && brokenField.GetValue(glass) == null)
-        {
-            var brokenGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            brokenGo.name = "BrokenWindow_Auto";
-            brokenGo.transform.position = glass.transform.position;
-            brokenGo.transform.localScale = new Vector3(1, 0.1f, 1);
-            var rend = brokenGo.GetComponent<Renderer>();
-            if (rend != null) rend.material.color = new Color(0.3f, 0.3f, 0.3f, 0.5f);
-            brokenGo.SetActive(false);
-            brokenField.SetValue(glass, brokenGo);
-        }
-
-        glass.OnBroken.RemoveAllListeners();
-        glass.OnBroken.AddListener(() =>
-        {
-            if (!endingTriggered)
+            // Find wall to attach window to - place window on outer wall with hole
+            Vector3 wallPos = Vector3.zero;
+            Vector3 wallScale = new Vector3(5, 3, 0.2f);
+            Quaternion wallRot = Quaternion.identity;
+            if (outerWall != null)
             {
-                endingTriggered = true;
-                StartCoroutine(EndingSequence());
-                Log("Window broken! Ending sequence per GDD: illustration player running, ghost watches, phone notification, fade to black");
+                wallPos = outerWall.transform.position;
+                var rend = outerWall.GetComponent<Renderer>();
+                if (rend != null) wallScale = rend.bounds.size;
+                // Place window slightly in front of wall, at center of wall but at window height
+                // For outer wall, window should be at wall's position + forward offset
+                Vector3 forward = outerWall.transform.forward;
+                if (forward == Vector3.zero) forward = Vector3.forward;
+                // If wall is large, place window at reasonable height
+                windowGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                windowGo.name = "BreakableWindow_GDD";
+                // Position: on wall, at 1.2m height, centered
+                windowGo.transform.position = wallPos + forward * 0.15f + new Vector3(0, 1.2f, 0);
+                windowGo.transform.rotation = outerWall.transform.rotation;
+                windowGo.transform.localScale = new Vector3(1.5f, 1.5f, 0.08f);
+                Log($"Created window on wall {outerWall.name} at {windowGo.transform.position} (was middle of room before)");
+                
+                // Create hole in wall visual - create a frame around window to show hole
+                CreateWindowHoleInWall(outerWall, windowGo.transform.position, new Vector3(1.6f, 1.6f, 0.3f));
             }
-        });
-        Log($"Ending window setup: {glass.name} breakable with Hammer tag, threshold 2");
+            else
+            {
+                // Fallback: place on far wall at exit
+                windowGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                windowGo.name = "BreakableWindow_GDD";
+                windowGo.transform.position = new Vector3(4.5f, 1.2f, 0);
+                windowGo.transform.localScale = new Vector3(0.08f, 1.5f, 1.5f);
+                Log($"Created window at exit position {windowGo.transform.position} (no outer wall found)");
+            }
+
+            // Setup collider
+            var col = windowGo.GetComponent<BoxCollider>();
+            if (col != null) DestroyImmediate(col);
+            var boxCol = windowGo.AddComponent<BoxCollider>();
+            boxCol.isTrigger = false;
+            boxCol.size = Vector3.one;
+
+            // Add Glass component with fracture and glass material
+            glass = windowGo.AddComponent<Glass>();
+            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
+            SetField(glass, "breakThreshold", 1.5f);
+            SetField(glass, "requiredTag", "Hammer");
+            SetField(glass, "useGlassMaterial", true);
+            SetField(glass, "spawnFractureOnBreak", true);
+            SetField(glass, "fracturePieces", 15);
+            SetField(glass, "fractureForce", 6f);
+
+            // Create broken window that looks like frame with hole
+            var broken = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            broken.name = "BrokenWindow_GDD";
+            broken.transform.position = windowGo.transform.position;
+            broken.transform.rotation = windowGo.transform.rotation;
+            broken.transform.localScale = new Vector3(1.6f, 1.6f, 0.1f);
+            var mr = broken.GetComponent<Renderer>();
+            if (mr != null)
+            {
+                // Frame material - dark
+                mr.material.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+            }
+            // Create hole visual - inner cube that is invisible to show hole
+            var hole = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            hole.name = "WindowHole";
+            hole.transform.SetParent(broken.transform);
+            hole.transform.localPosition = Vector3.zero;
+            hole.transform.localScale = new Vector3(0.85f, 0.85f, 1.1f);
+            var holeRend = hole.GetComponent<Renderer>();
+            if (holeRend != null)
+            {
+                holeRend.material.color = new Color(0, 0, 0, 0); // transparent hole
+                // Make it look like sky/outside
+                holeRend.material = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
+                holeRend.material.color = new Color(0.5f, 0.7f, 1f, 0.2f);
+            }
+            Destroy(hole.GetComponent<Collider>());
+
+            broken.SetActive(false);
+            SetField(glass, "brokenWindow", broken);
+            Log("Created BreakableWindow_GDD with glass material and brokenWindow with hole");
+        }
+
+        if (glass != null)
+        {
+            if (glass.OnBroken == null) glass.OnBroken = new UnityEngine.Events.UnityEvent();
+            if (glass.GetComponent<Collider>() == null) glass.gameObject.AddComponent<BoxCollider>();
+            SetField(glass, "breakThreshold", 1.5f);
+            SetField(glass, "requiredTag", "Hammer");
+            SetField(glass, "useGlassMaterial", true);
+            SetField(glass, "spawnFractureOnBreak", true);
+
+            var brokenField = typeof(Glass).GetField("brokenWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (brokenField != null && brokenField.GetValue(glass) == null)
+            {
+                var brokenGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                brokenGo.name = "BrokenWindow_Auto";
+                brokenGo.transform.position = glass.transform.position;
+                brokenGo.transform.rotation = glass.transform.rotation;
+                brokenGo.transform.localScale = new Vector3(1.6f, 1.6f, 0.1f);
+                var rend = brokenGo.GetComponent<Renderer>();
+                if (rend != null) rend.material.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+                brokenGo.SetActive(false);
+                brokenField.SetValue(glass, brokenGo);
+            }
+
+            glass.OnBroken.RemoveAllListeners();
+            glass.OnBroken.AddListener(() =>
+            {
+                if (!endingTriggered)
+                {
+                    endingTriggered = true;
+                    StartCoroutine(EndingSequence());
+                    Log("Window broken! Fracture spawned, brokenWindow with hole activated, ending per GDD");
+                }
+            });
+            Log($"Ending window setup: {glass.name} at {glass.transform.position} on wall, glass material, fracture {GetField<int>(glass, "fracturePieces")} pieces, breakable with Hammer");
+        }
     }
 
+    void CreateWindowHoleInWall(GameObject wall, Vector3 windowPos, Vector3 holeSize)
+    {
+        try
+        {
+            // Create a visual frame around window to indicate hole in wall
+            var frameParent = new GameObject("WindowFrame_GDD");
+            frameParent.transform.position = windowPos;
+            frameParent.transform.rotation = wall.transform.rotation;
+            
+            // Create 4 frame pieces
+            float thickness = 0.1f;
+            // Top
+            var top = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            top.name = "Frame_Top";
+            top.transform.SetParent(frameParent.transform);
+            top.transform.localPosition = new Vector3(0, holeSize.y/2 + thickness/2, 0);
+            top.transform.localScale = new Vector3(holeSize.x + thickness*2, thickness, holeSize.z);
+            // Bottom
+            var bottom = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            bottom.name = "Frame_Bottom";
+            bottom.transform.SetParent(frameParent.transform);
+            bottom.transform.localPosition = new Vector3(0, -holeSize.y/2 - thickness/2, 0);
+            bottom.transform.localScale = new Vector3(holeSize.x + thickness*2, thickness, holeSize.z);
+            // Left
+            var left = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            left.name = "Frame_Left";
+            left.transform.SetParent(frameParent.transform);
+            left.transform.localPosition = new Vector3(-holeSize.x/2 - thickness/2, 0, 0);
+            left.transform.localScale = new Vector3(thickness, holeSize.y, holeSize.z);
+            // Right
+            var right = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            right.name = "Frame_Right";
+            right.transform.SetParent(frameParent.transform);
+            right.transform.localPosition = new Vector3(holeSize.x/2 + thickness/2, 0, 0);
+            right.transform.localScale = new Vector3(thickness, holeSize.y, holeSize.z);
+
+            foreach (var f in new[] { top, bottom, left, right })
+            {
+                var rend = f.GetComponent<Renderer>();
+                if (rend != null) rend.material.color = new Color(0.4f, 0.25f, 0.1f); // wood frame
+                Destroy(f.GetComponent<Collider>());
+            }
+
+            // Create hole indicator - disable wall collider in window area if possible
+            var wallCol = wall.GetComponent<Collider>();
+            if (wallCol is BoxCollider boxCol)
+            {
+                // Can't easily create hole in collider, but we can make window collider trigger and wall not block
+                // For solvability, ensure player can go through window after break
+                Log($"Window frame created on wall {wall.name}, hole size {holeSize}");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"[GDD] Failed to create window hole: {ex.Message}");
+        }
+    }
+
+
     #endregion
+
 
     #region Phone Story
 

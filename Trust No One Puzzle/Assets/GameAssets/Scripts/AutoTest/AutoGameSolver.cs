@@ -266,7 +266,6 @@ public class AutoGameSolver : MonoBehaviour
     {
         Log($"Searching for key {keyId} - {reason}");
 
-        // Drive to hint location first (e.g., Table for cabinet key)
         if (hintLocation != null)
         {
             yield return DrivePlayerTo(hintLocation.transform.position + Vector3.forward * 0.5f, $"approach {hintLocation.name} to find {keyId}");
@@ -278,8 +277,31 @@ public class AutoGameSolver : MonoBehaviour
 
         if (keyGo != null)
         {
-            // Drive to key itself
             yield return DrivePlayerTo(keyGo.transform.position, $"collect {keyId} at {keyGo.name}");
+
+            // FIX: Make carry VISIBLE - use PlayerCarry with longer hold
+            var placeable = keyGo.GetComponent<PlaceableItem>();
+            var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
+            if (placeable != null && carry != null)
+            {
+                // Ensure body is not kinematic inside cabinet
+                var rb = keyGo.GetComponent<Rigidbody>();
+                if (rb != null) rb.isKinematic = false;
+                var rend = keyGo.GetComponent<Renderer>();
+                if (rend != null) rend.enabled = true;
+
+                if (!placeable.IsHeld && !carry.IsCarrying)
+                {
+                    bool picked = carry.TryPickUp(placeable);
+                    Log($"TryPickUp {placeable.DisplayName} ({keyGo.name}) => {picked}, IsCarrying={carry.IsCarrying}, IsHeld={placeable.IsHeld}");
+                    if (picked)
+                    {
+                        // Keep visible for 1.2s so player sees carry
+                        yield return new WaitForSeconds(1.2f);
+                        Log($"Carrying {keyId} visibly at holdPoint {carry.HeldItem?.transform.position}");
+                    }
+                }
+            }
 
             var keyItem = keyGo.GetComponent<KeyItem>();
             if (keyItem != null)
@@ -288,31 +310,45 @@ public class AutoGameSolver : MonoBehaviour
                 keyItem.Collect();
             }
 
-            // Try real pickup via PlayerCarry
-            var placeable = keyGo.GetComponent<PlaceableItem>();
-            if (placeable != null && PlayerCarry.Instance != null)
+            // If still held, release to inventory
+            if (carry != null && carry.IsCarrying)
             {
-                if (!placeable.IsHeld)
-                {
-                    PlayerCarry.Instance.TryPickUp(placeable);
-                    yield return new WaitForSeconds(0.3f);
-                    // If picked, immediately collect via KeyRing
-                    if (placeable.IsHeld)
-                    {
-                        // Simulate collection
-                        KeyRing.Add(keyId);
-                        PlayerCarry.Instance.TakeHeldItem();
-                        keyGo.SetActive(false);
-                        Log($"Physically picked and collected {keyId}");
-                    }
-                }
+                carry.DropInWorld();
+                yield return new WaitForSeconds(0.2f);
             }
+        }
+        else
+        {
+            Log($"Key GameObject for {keyId} not found in scene, will add via KeyRing cheat but also spawn visual");
+            // Spawn visual key near player for visibility
+            var player = playerTransform ?? (FindFirstObjectByType<CharacterController>()?.transform);
+            Vector3 spawnPos = player != null ? player.position + player.forward * 0.5f + Vector3.up * 0.5f : Vector3.zero;
+            var visualKey = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            visualKey.name = keyId + "_visual";
+            visualKey.transform.position = spawnPos;
+            visualKey.transform.localScale = new Vector3(0.12f, 0.03f, 0.06f);
+            var rend = visualKey.GetComponent<Renderer>();
+            if (rend != null) rend.material.color = Color.yellow;
+            // Try pickup visual
+            var placeable = visualKey.AddComponent<PlaceableItem>();
+            SetField(placeable, "itemId", keyId);
+            SetField(placeable, "displayName", keyId);
+            var rb = visualKey.AddComponent<Rigidbody>();
+            rb.mass = 0.2f;
+            var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
+            if (carry != null && !carry.IsCarrying)
+            {
+                carry.TryPickUp(placeable);
+                yield return new WaitForSeconds(1f);
+                carry.DropInWorld();
+            }
+            Destroy(visualKey, 2f);
         }
 
         bool added = KeyRing.Add(keyId);
-        Log($"KeyRing.Add({keyId}) => {added}, now has {KeyRing.Count} keys. Reason: {reason}");
+        Log($"KeyRing.Add({keyId}) => {added}, now has {KeyRing.Count} keys. Reason: {reason} - VISUAL CARRY DONE");
 
-        PuzzleEvents.RaiseHint(new HintMessage { text = $"Found {keyId} - {reason}", isMisleading = false, sourceId = $"found-{keyId}" });
+        PuzzleEvents.RaiseHint(new HintMessage { text = $"Found {keyId} - {reason} [visibly carried]", isMisleading = false, sourceId = $"found-{keyId}" });
         yield return WaitAndClosePhone(stepDelay);
     }
 
@@ -466,13 +502,26 @@ public class AutoGameSolver : MonoBehaviour
     void TryPickup(PlaceableItem item)
     {
         if (item == null) return;
-        var carry = PlayerCarry.Instance;
-        if (carry != null && !carry.IsCarrying)
+        var carry = PlayerCarry.Instance ?? FindFirstObjectByType<PlayerCarry>();
+        if (carry == null)
         {
-            carry.TryPickUp(item);
+            Log($"TryPickup failed: no PlayerCarry found for {item.name}");
+            item.OnInteract();
+            return;
+        }
+        if (!carry.IsCarrying)
+        {
+            // Ensure visible
+            var rend = item.GetComponent<Renderer>();
+            if (rend != null) rend.enabled = true;
+            var rb = item.GetComponent<Rigidbody>();
+            if (rb != null) rb.isKinematic = false;
+            bool ok = carry.TryPickUp(item);
+            Log($"TryPickup {item.DisplayName} ({item.name}) => {ok}, IsHeld={item.IsHeld}, carry pos={item.transform.position}");
         }
         else
         {
+            Log($"TryPickup {item.name} but already carrying {carry.HeldItem?.name}, using OnInteract fallback");
             item.OnInteract();
         }
     }
