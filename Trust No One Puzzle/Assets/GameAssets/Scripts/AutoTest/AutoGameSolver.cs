@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UIElements;
 using UnityEngine.AI;
 using GameAssets.Scripts.Environment;
 using GameAssets.Scripts.Interaction;
@@ -250,24 +251,32 @@ public class AutoGameSolver : MonoBehaviour
     IEnumerator WaitAndClosePhone(float delay)
     {
         yield return new WaitForSeconds(delay);
-        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception (ignored): {e.Message}"); }
+        bool closeFailed = false;
+        try { ClosePhone(); } catch (System.Exception e) { Log($"ClosePhone exception (ignored): {e.Message}"); closeFailed = true; }
+        MobilePhoneController phone = null;
         try
         {
-            var phone = MobilePhoneController.Instance;
+            phone = MobilePhoneController.Instance;
             if (phone == null) phone = FindFirstObjectByType<MobilePhoneController>();
-            if (phone != null && phone.IsOpen)
+        }
+        catch { }
+        if (phone != null)
+        {
+            try
             {
-                phone.SetOpen(false);
-                var doc = phone.GetComponent<UnityEngine.UIElements.UIDocument>();
+                if (phone.IsOpen) phone.SetOpen(false);
+                var doc = phone.GetComponent<UIDocument>();
                 if (doc != null && doc.rootVisualElement != null)
                 {
-                    var root = doc.rootVisualElement.Q("phone-root");
+                    var root = doc.rootVisualElement.Q<VisualElement>("phone-root");
                     if (root != null) root.EnableInClassList("hidden", true);
                 }
             }
-        } catch { }
+            catch (System.Exception e) { Log($"Second close attempt failed: {e.Message}"); }
+        }
         yield return null;
     }
+
 
     void ClosePhone()
     {
@@ -311,8 +320,10 @@ public class AutoGameSolver : MonoBehaviour
 
         Log($"Driving player to {target} reason: {reason} agent null? {agent==null} onNavMesh? {agent?.isOnNavMesh}");
 
+        bool usedNavMesh = false;
         if (agent != null)
         {
+            bool warpFailed = false;
             try
             {
                 if (!agent.isOnNavMesh)
@@ -328,19 +339,31 @@ public class AutoGameSolver : MonoBehaviour
                         yield break;
                     }
                 }
+            }
+            catch (System.Exception e) { Log($"Warp ex: {e.Message}"); warpFailed = true; }
 
-                if (agent.isOnNavMesh)
+            if (!warpFailed && agent.isOnNavMesh)
+            {
+                Vector3 navTarget = target;
+                try
                 {
                     if (NavMesh.SamplePosition(target, out var hit, 3f, NavMesh.AllAreas))
-                        target = hit.position;
-                    agent.SetDestination(target);
-                    float timer = 0f;
-                    float stuckTimer = 0f;
-                    Vector3 lastPos = playerTransform.position;
-                    while (timer < driveWaitTimeout)
+                        navTarget = hit.position;
+                    agent.SetDestination(navTarget);
+                }
+                catch (System.Exception e) { Log($"SetDestination ex: {e.Message}"); }
+
+                // Now loop without try-catch containing yield
+                float timer = 0f;
+                float stuckTimer = 0f;
+                Vector3 lastPos = playerTransform.position;
+                while (timer < driveWaitTimeout)
+                {
+                    bool shouldBreak = false;
+                    try
                     {
-                        if (!agent.pathPending && agent.remainingDistance <= 1.2f) break;
-                        if (Vector3.Distance(playerTransform.position, target) <= 1.5f) break;
+                        if (!agent.pathPending && agent.remainingDistance <= 1.2f) shouldBreak = true;
+                        if (Vector3.Distance(playerTransform.position, navTarget) <= 1.5f) shouldBreak = true;
                         float moved = Vector3.Distance(playerTransform.position, lastPos);
                         if (moved < 0.05f && agent.velocity.magnitude < 0.1f && agent.remainingDistance > 1f)
                         {
@@ -353,21 +376,29 @@ public class AutoGameSolver : MonoBehaviour
                                     agent.Warp(freeHit.position);
                                     playerTransform.position = freeHit.position;
                                 }
-                                else break;
+                                else
+                                {
+                                    break;
+                                }
                                 stuckTimer = 0f;
                             }
                         }
                         else { stuckTimer = 0f; lastPos = playerTransform.position; }
-                        timer += Time.deltaTime;
-                        yield return null;
                     }
-                    yield return new WaitForSeconds(0.1f);
-                    yield break;
+                    catch (System.Exception e) { Log($"Drive loop ex: {e.Message}"); break; }
+
+                    if (shouldBreak) break;
+                    timer += Time.deltaTime;
+                    yield return null;
                 }
+                usedNavMesh = true;
+                Log($"Reached target {navTarget} (remaining {agent.remainingDistance})");
+                yield return new WaitForSeconds(0.1f);
+                if (usedNavMesh) yield break;
             }
-            catch (System.Exception e) { Log($"Drive NavMesh ex: {e.Message}, fallback direct"); }
         }
 
+        // Fallback direct lerp
         Log($"Fallback direct move to {target} reason {reason}");
         float directTimer = 0f;
         float directDuration = Mathf.Clamp(Vector3.Distance(playerTransform.position, target) / 3.5f, 0.5f, 5f);
