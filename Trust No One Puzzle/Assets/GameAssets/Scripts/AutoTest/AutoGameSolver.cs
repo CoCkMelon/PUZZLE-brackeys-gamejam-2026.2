@@ -549,7 +549,7 @@ public class AutoGameSolver : MonoBehaviour
         if (!verboseLogs) return;
         GUILayout.BeginArea(new Rect(10, 10, 350, 250));
         GUILayout.Label($"AutoGameSolver - {currentState}");
-        GUILayout.Label($"Keys: {string.Join(\", \", KeyRing.CollectedKeys)}");
+        GUILayout.Label($"Keys: {string.Join(", ", KeyRing.CollectedKeys)}");
         if (GUILayout.Button("Start Full Auto Solve")) StartSolving();
         if (GUILayout.Button("Stop")) StopSolving();
         if (GUILayout.Button("Force Complete -> Break Window"))
