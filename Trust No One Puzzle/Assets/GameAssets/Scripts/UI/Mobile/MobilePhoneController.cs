@@ -257,7 +257,7 @@ namespace GameAssets.Scripts.UI.Mobile
                     if (neverDisableAutoMover)
                     {
                         var typeName = behaviour.GetType().Name;
-                        if (typeName.Contains("AutoPlayerMover") || typeName.Contains("AutoStrangerMover") || typeName.Contains("NavMeshAgent") || typeName.Contains("PlayerCarry") || typeName.Contains("NavMeshAutoBaker"))
+                        if (typeName.Contains("AutoPlayerMover") || typeName.Contains("AutoStrangerMover") || typeName.Contains("NavMeshAgent") || typeName.Contains("PlayerCarry") || typeName.Contains("NavMeshAutoBaker") || typeName.Contains("AutoGameSolver") || typeName.Contains("AutoTestManager"))
                             continue;
                     }
                     behaviour.enabled = enabled;
