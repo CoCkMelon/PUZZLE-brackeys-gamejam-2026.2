@@ -154,7 +154,8 @@ public class AutoGameSolver : MonoBehaviour
         {
             currentState = GameState.Failed;
             Log("AutoGameSolver: FAILED to complete - glass not broken or keys missing. Not raising completed.");
-            PuzzleEvents.RaiseHint(new HintMessage { text = $"AUTO SOLVER: Failed - glassBroken={glassBroken} keys={string.Join(", ", KeyRing.CollectedKeys)}", isMisleading = false, sourceId = "autosolver-failed" });
+            string failKeys = string.Join(", ", KeyRing.CollectedKeys);
+            PuzzleEvents.RaiseHint(new HintMessage { text = $"AUTO SOLVER: Failed - glassBroken={glassBroken} keys={failKeys}", isMisleading = false, sourceId = "autosolver-failed" });
         }
     }
 
@@ -785,9 +786,13 @@ public class AutoGameSolver : MonoBehaviour
     {
         if (!verboseLogs) return;
         GUILayout.BeginArea(new Rect(10, 10, 380, 300));
-        GUILayout.Label($"AutoGameSolver - {currentState} {(glassBroken?\"(glass broken)\":\"\")}");
-        GUILayout.Label($"Keys: {string.Join(", ", KeyRing.CollectedKeys)}");
-        GUILayout.Label($"Player: {(playerTransform!=null?playerTransform.position.ToString():\"null\")} Agent on NavMesh: {(agent!=null?agent.isOnNavMesh.ToString():\"null\")}");
+        string glassText = glassBroken ? "(glass broken)" : "";
+        string playerPos = playerTransform != null ? playerTransform.position.ToString() : "null";
+        string agentNav = agent != null ? agent.isOnNavMesh.ToString() : "null";
+        GUILayout.Label($"AutoGameSolver - {currentState} {glassText}");
+        string onGuiKeys = string.Join(", ", KeyRing.CollectedKeys);
+        GUILayout.Label($"Keys: {onGuiKeys}");
+        GUILayout.Label($"Player: {playerPos} Agent on NavMesh: {agentNav}");
         if (GUILayout.Button("Start Full Auto Solve")) StartSolving();
         if (GUILayout.Button("Stop")) StopSolving();
         if (GUILayout.Button("Force Complete -> Break Window"))

@@ -255,7 +255,8 @@ public class AutoTestManager : MonoBehaviour
         if (!showDebugLogs) return;
         GUILayout.BeginArea(new Rect(10, 10, 320, 280));
         GUILayout.Label($"AutoTest - {SceneManager.GetActiveScene().name}");
-        GUILayout.Label($"Keys: {string.Join(", ", KeyRing.CollectedKeys)}");
+        string keysStr = string.Join(", ", KeyRing.CollectedKeys);
+        GUILayout.Label($"Keys: {keysStr}");
         GUILayout.Label($"NavMesh vertices: {NavMesh.CalculateTriangulation().vertices.Length}");
         if (GUILayout.Button("Start Auto Tests")) StartTests();
         if (GUILayout.Button("Restart Scene")) RestartTest();
