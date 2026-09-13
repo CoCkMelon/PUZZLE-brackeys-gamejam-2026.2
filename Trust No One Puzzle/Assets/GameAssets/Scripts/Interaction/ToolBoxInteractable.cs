@@ -118,7 +118,54 @@ namespace GameAssets.Scripts.Interaction
 
             if (cover == null)
             {
-                Debug.LogError($"[ToolBoxInteractable] No cover transform assigned on {gameObject.name}!");
+                // AUTO-FIX for GDD assembly: try to find cover child instead of hard error
+                Transform found = null;
+                string[] names = { "Cover", "Lid", "Top", "CoverMesh", "tool Box_Cover", "ToolBox_Cover", "tool Box Lid" };
+                foreach (var n in names)
+                {
+                    var t = transform.Find(n);
+                    if (t != null) { found = t; break; }
+                }
+                if (found == null)
+                {
+                    foreach (Transform child in transform)
+                    {
+                        if (child.name.ToLower().Contains("bottom")) continue;
+                        if (child.GetComponent<MeshRenderer>() != null || child.GetComponentInChildren<MeshRenderer>() != null)
+                        {
+                            found = child;
+                            break;
+                        }
+                    }
+                }
+                if (found != null)
+                {
+                    cover = found;
+                    Debug.LogWarning($"[ToolBoxInteractable] Auto-assigned cover {found.name} on {gameObject.name} (was null) - fixed for GDD");
+                }
+                else
+                {
+                    var dummy = new GameObject("Cover_Auto_Fixed");
+                    dummy.transform.SetParent(transform);
+                    dummy.transform.localPosition = new Vector3(0, 0.15f, 0);
+                    dummy.transform.localRotation = Quaternion.identity;
+                    dummy.transform.localScale = new Vector3(0.9f, 0.1f, 0.6f);
+                    var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    cube.name = "CoverVisual";
+                    cube.transform.SetParent(dummy.transform);
+                    cube.transform.localPosition = Vector3.zero;
+                    cube.transform.localRotation = Quaternion.identity;
+                    cube.transform.localScale = Vector3.one;
+                    var col = cube.GetComponent<Collider>();
+                    if (col != null) Destroy(col);
+                    cover = dummy.transform;
+                    Debug.LogWarning($"[ToolBoxInteractable] Created dummy cover on {gameObject.name} to fix missing cover - GDD assembly");
+                }
+            }
+
+            if (cover == null)
+            {
+                Debug.LogError($"[ToolBoxInteractable] No cover transform assigned on {gameObject.name} even after auto-fix!");
                 return;
             }
 
