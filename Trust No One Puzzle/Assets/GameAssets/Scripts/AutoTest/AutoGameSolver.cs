@@ -234,27 +234,19 @@ public class AutoGameSolver : MonoBehaviour
 
     IEnumerator StoryIntro()
     {
-        try
-        {
-            Log("Story: Real estate viewing, stranger arrives, tour, objects disappearing");
-            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Agent: Sending colleague for house viewing.", isMisleading = false, sourceId = "story01" }); } catch (System.Exception e) { Log($"RaiseHint story01 ex: {e.Message}"); }
-            yield return WaitAndClosePhone(stepDelay);
-            Log("Story: Bathroom mirror - stranger has NO REFLECTION");
-            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Bathroom: Stranger has NO REFLECTION!", isMisleading = false, sourceId = "story04" }); } catch (System.Exception e) { Log($"RaiseHint story04 ex: {e.Message}"); }
-            yield return WaitAndClosePhone(stepDelay);
-            Log("Story: Real agent message - accident, colleague never came");
-            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Real Agent: Accident! My colleague never came. WHO IS THERE?!", isMisleading = false, sourceId = "story05" }); } catch (System.Exception e) { Log($"RaiseHint story05 ex: {e.Message}"); }
-            yield return WaitAndClosePhone(stepDelay);
-            Log("Story: Stranger disappears, doors locked, hide in small room near exit");
-            try { PuzzleEvents.RaiseHint(new HintMessage { text = "Stranger disappears. Doors locked. TRUST NO ONE.", isMisleading = false, sourceId = "story06" }); } catch (System.Exception e) { Log($"RaiseHint story06 ex: {e.Message}"); }
-            yield return WaitAndClosePhone(stepDelay);
-            Log("StoryIntro completed");
-        }
-        catch (System.Exception e)
-        {
-            Log($"StoryIntro exception (will continue): {e.Message} {e.StackTrace}");
-            yield return new WaitForSeconds(0.5f);
-        }
+        Log("Story: Real estate viewing, stranger arrives, tour, objects disappearing");
+        try { PuzzleEvents.RaiseHint(new HintMessage { text = "Agent: Sending colleague for house viewing.", isMisleading = false, sourceId = "story01" }); } catch (System.Exception e) { Log($"RaiseHint story01 ex: {e.Message}"); }
+        yield return WaitAndClosePhone(stepDelay);
+        Log("Story: Bathroom mirror - stranger has NO REFLECTION");
+        try { PuzzleEvents.RaiseHint(new HintMessage { text = "Bathroom: Stranger has NO REFLECTION!", isMisleading = false, sourceId = "story04" }); } catch (System.Exception e) { Log($"RaiseHint story04 ex: {e.Message}"); }
+        yield return WaitAndClosePhone(stepDelay);
+        Log("Story: Real agent message - accident, colleague never came");
+        try { PuzzleEvents.RaiseHint(new HintMessage { text = "Real Agent: Accident! My colleague never came. WHO IS THERE?!", isMisleading = false, sourceId = "story05" }); } catch (System.Exception e) { Log($"RaiseHint story05 ex: {e.Message}"); }
+        yield return WaitAndClosePhone(stepDelay);
+        Log("Story: Stranger disappears, doors locked, hide in small room near exit");
+        try { PuzzleEvents.RaiseHint(new HintMessage { text = "Stranger disappears. Doors locked. TRUST NO ONE.", isMisleading = false, sourceId = "story06" }); } catch (System.Exception e) { Log($"RaiseHint story06 ex: {e.Message}"); }
+        yield return WaitAndClosePhone(stepDelay);
+        Log("StoryIntro completed");
     }
 
     IEnumerator WaitAndClosePhone(float delay)
