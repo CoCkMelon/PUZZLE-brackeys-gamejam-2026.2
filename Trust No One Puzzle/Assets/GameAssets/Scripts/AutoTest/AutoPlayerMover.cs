@@ -1,9 +1,15 @@
 using UnityEngine;
 using UnityEngine.AI;
+using GameAssets.Scripts.Interaction;
+using GameAssets.Scripts.Puzzle;
+using GameAssets.Scripts.Environment;
+using GameAssets.Scripts.Entities.Player;
 
 /// <summary>
-/// Automatically moves player via NavMeshAgent for testing puzzles.
-/// Attach to Player FPP or TPP. Requires NavMeshAgent.
+/// Fully automatic player for AutoTest scenes.
+/// Disables manual FPP controller, CharacterController, PlayerInteraction
+/// and drives player via NavMeshAgent, auto-picking, placing, opening, breaking.
+/// Attach to Player root. Requires no manual input.
 /// </summary>
 [RequireComponent(typeof(NavMeshAgent))]
 public class AutoPlayerMover : MonoBehaviour
@@ -13,10 +19,11 @@ public class AutoPlayerMover : MonoBehaviour
     [Header("Mode")]
     [SerializeField] private TestMode mode = TestMode.FullGameAuto;
     [SerializeField] private bool autoStart = true;
-    [SerializeField] private float waypointReachDistance = 0.5f;
-    [SerializeField] private float waitAtWaypoint = 0.5f;
+    [SerializeField] private float waypointReachDistance = 0.6f;
+    [SerializeField] private float waitAtWaypoint = 0.6f;
+    [SerializeField] private float interactRange = 3f;
 
-    [Header("Waypoints")]
+    [Header("Waypoints (optional)")]
     [SerializeField] private Transform[] waypoints;
     [SerializeField] private Transform mirrorKeyLocation;
     [SerializeField] private Transform cabinetLocation;
@@ -31,116 +38,523 @@ public class AutoPlayerMover : MonoBehaviour
     [SerializeField] private float runSpeed = 5f;
     [SerializeField] private bool useRun = false;
 
+    [Header("Auto-Solve")]
+    [SerializeField] private bool autoPickup = true;
+    [SerializeField] private bool autoPlace = true;
+    [SerializeField] private bool autoOpen = true;
+    [SerializeField] private bool autoBreakWindow = true;
+    [SerializeField] private float actionCooldown = 0.4f;
+
     private NavMeshAgent _agent;
     private int _currentIndex;
     private float _waitTimer;
+    private float _actionTimer;
     private bool _isRunning;
+
+    // Manual controllers to disable
+    private CharacterController _charController;
+    private PlayerController _playerController;
+    private FPPCameraController _fppCamera;
+    private PlayerInteraction _playerInteraction;
 
     private void Awake()
     {
         _agent = GetComponent<NavMeshAgent>();
+        _charController = GetComponent<CharacterController>();
+        _playerController = GetComponent<PlayerController>();
+        _fppCamera = GetComponentInChildren<FPPCameraController>();
+        if (_fppCamera == null) _fppCamera = GetComponent<FPPCameraController>();
+        _playerInteraction = GetComponent<PlayerInteraction>();
+
+        DisableManualControllers();
+
         _agent.speed = useRun ? runSpeed : moveSpeed;
         _agent.angularSpeed = 360f;
-        _agent.acceleration = 8f;
+        _agent.acceleration = 12f;
         _agent.stoppingDistance = waypointReachDistance;
+        _agent.autoBraking = true;
+        _agent.updateRotation = true;
     }
 
-    private void Start() { if (autoStart) StartAuto(); }
+    private void OnEnable()
+    {
+        // Ensure cursor unlocked for auto
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    private void Start()
+    {
+        // Warp to NavMesh if not on it
+        if (NavMesh.SamplePosition(transform.position, out var hit, 5f, NavMesh.AllAreas))
+        {
+            _agent.Warp(hit.position);
+        }
+
+        if (autoStart) StartAuto();
+    }
+
+    private void DisableManualControllers()
+    {
+        if (_charController != null)
+        {
+            _charController.enabled = false;
+            Debug.Log("[AutoPlayerMover] Disabled CharacterController for auto");
+        }
+        if (_playerController != null)
+        {
+            _playerController.enabled = false;
+            Debug.Log("[AutoPlayerMover] Disabled PlayerController for auto");
+        }
+        if (_fppCamera != null)
+        {
+            _fppCamera.enabled = false;
+            Debug.Log("[AutoPlayerMover] Disabled FPPCameraController for auto");
+        }
+        if (_playerInteraction != null)
+        {
+            _playerInteraction.enabled = false;
+            Debug.Log("[AutoPlayerMover] Disabled PlayerInteraction for auto");
+        }
+
+        // Also disable any other PlayerController in children
+        var pcs = GetComponentsInChildren<PlayerController>();
+        foreach (var pc in pcs) pc.enabled = false;
+        var fpcs = GetComponentsInChildren<FPPCameraController>();
+        foreach (var f in fpcs) f.enabled = false;
+        var pis = GetComponentsInChildren<PlayerInteraction>();
+        foreach (var pi in pis) pi.enabled = false;
+    }
 
     public void StartAuto()
     {
+        DisableManualControllers();
         _isRunning = true;
         _currentIndex = 0;
         _waitTimer = 0f;
+        _actionTimer = 0f;
+
+        // Try to bake navmesh first via manager
+        var baker = FindFirstObjectByType<NavMeshAutoBaker>();
+        baker?.TryBake();
+
         if (mode == TestMode.ManualWaypoints && waypoints != null && waypoints.Length > 0 && waypoints[0] != null)
-            _agent.SetDestination(waypoints[0].position);
+            SetDestination(waypoints[0].position);
         else
-            StartRoom1Auto();
+            SetNextPuzzleDestination();
+
+        Debug.Log($"[AutoPlayerMover] Auto started in mode {mode}");
     }
 
-    public void StopAuto() { _isRunning = false; _agent.ResetPath(); }
+    public void StopAuto()
+    {
+        _isRunning = false;
+        if (_agent.isOnNavMesh) _agent.ResetPath();
+    }
 
     private void Update()
     {
         if (!_isRunning) return;
-        switch (mode)
+
+        if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
+        if (_actionTimer > 0) { _actionTimer -= Time.deltaTime; }
+
+        // If agent not on navmesh, try to warp
+        if (!_agent.isOnNavMesh)
         {
-            case TestMode.ManualWaypoints: UpdateManualWaypoints(); break;
-            default: UpdateAutoPuzzle(); break;
+            if (NavMesh.SamplePosition(transform.position, out var hit, 10f, NavMesh.AllAreas))
+                _agent.Warp(hit.position);
+            return;
+        }
+
+        // Check if reached destination
+        if (!_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.3f)
+        {
+            // Try to interact with nearby puzzle objects
+            if (_actionTimer <= 0f)
+            {
+                bool didAction = TryAutoInteract();
+                if (didAction) _actionTimer = actionCooldown;
+            }
+
+            _waitTimer = waitAtWaypoint;
+            SetNextPuzzleDestination();
         }
     }
 
-    private void UpdateManualWaypoints()
+    private void SetNextPuzzleDestination()
     {
-        if (waypoints == null || waypoints.Length == 0) return;
-        if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
-        if (!_agent.pathPending && _agent.remainingDistance <= waypointReachDistance)
+        Transform next = FindNextPuzzleTarget();
+        if (next != null)
         {
-            _waitTimer = waitAtWaypoint;
+            SetDestination(next.position);
+        }
+        else if (waypoints != null && waypoints.Length > 0)
+        {
             _currentIndex = (_currentIndex + 1) % waypoints.Length;
-            if (waypoints[_currentIndex] != null) _agent.SetDestination(waypoints[_currentIndex].position);
+            if (waypoints[_currentIndex] != null)
+                SetDestination(waypoints[_currentIndex].position);
         }
     }
 
-    private void StartRoom1Auto()
+    private void SetDestination(Vector3 pos)
     {
-        if (mirrorKeyLocation != null) _agent.SetDestination(mirrorKeyLocation.position);
-        else if (waypoints != null && waypoints.Length > 0 && waypoints[0] != null) _agent.SetDestination(waypoints[0].position);
+        if (!_agent.isOnNavMesh) return;
+        // Clamp to NavMesh
+        if (NavMesh.SamplePosition(pos, out var hit, 5f, NavMesh.AllAreas))
+            pos = hit.position;
+        _agent.SetDestination(pos);
     }
 
-    private void UpdateAutoPuzzle()
+    private Transform FindNextPuzzleTarget()
     {
-        if (_waitTimer > 0) { _waitTimer -= Time.deltaTime; return; }
-        if (!_agent.pathPending && _agent.remainingDistance <= waypointReachDistance + 0.5f)
-        {
-            _waitTimer = waitAtWaypoint;
-            // Cycle through assigned locations in order for full game auto
-            Transform next = null;
-            if (mode == TestMode.FullGameAuto || mode == TestMode.AutoPuzzleRoom1)
-            {
-                if (_currentIndex == 0) next = mirrorKeyLocation;
-                else if (_currentIndex == 1) next = cabinetLocation;
-                else if (_currentIndex == 2) next = placementTableLocation;
-                else if (_currentIndex == 3) next = toolboxDrawerLocation;
-                else if (_currentIndex == 4) next = toolboxLocation;
-                else if (_currentIndex == 5) next = sofaHammerLocation;
-                else if (_currentIndex == 6) next = windowLocation;
-            }
-            else if (mode == TestMode.AutoPuzzleRoom2)
-            {
-                if (_currentIndex == 0) next = toolboxDrawerLocation;
-                else if (_currentIndex == 1) next = toolboxLocation;
-                else if (_currentIndex == 2) next = sofaHammerLocation;
-                else if (_currentIndex == 3) next = windowLocation;
-            }
+        var carry = PlayerCarry.Instance;
+        bool isCarrying = carry != null && carry.IsCarrying;
 
-            if (next == null && waypoints != null && waypoints.Length > 0)
+        // If carrying, go to correct slot
+        if (isCarrying && carry.HeldItem != null)
+        {
+            var heldId = carry.HeldItem.ItemId;
+            var slots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
+            PlacementSlot bestSlot = null;
+            float bestDist = float.MaxValue;
+            foreach (var slot in slots)
             {
-                _currentIndex = (_currentIndex + 1) % waypoints.Length;
-                next = waypoints[_currentIndex];
+                if (slot.IsOccupied) continue;
+                if (slot.RequiredItemId != heldId) continue;
+                float d = Vector3.Distance(transform.position, slot.transform.position);
+                if (d < bestDist) { bestDist = d; bestSlot = slot; }
+            }
+            if (bestSlot != null) return bestSlot.transform;
+            // If no correct slot, try any empty slot
+            foreach (var slot in slots)
+            {
+                if (slot.IsOccupied) continue;
+                float d = Vector3.Distance(transform.position, slot.transform.position);
+                if (d < bestDist) { bestDist = d; bestSlot = slot; }
+            }
+            if (bestSlot != null) return bestSlot.transform;
+        }
+
+        // If not carrying, find closest needed item
+        if (!isCarrying && autoPickup)
+        {
+            var items = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
+            PlaceableItem closest = null;
+            float bestDist = float.MaxValue;
+            foreach (var item in items)
+            {
+                if (item.IsHeld) continue;
+                if (item.OccupyingSlot != null && item.OccupyingSlot.IsCorrectlyFilled) continue;
+                // Check if item is needed somewhere
+                bool needed = false;
+                var slots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
+                foreach (var s in slots)
+                {
+                    if (!s.IsOccupied && s.RequiredItemId == item.ItemId) { needed = true; break; }
+                }
+                if (!needed && mode == TestMode.FullGameAuto) needed = true; // try all in full auto
+
+                if (!needed) continue;
+                float d = Vector3.Distance(transform.position, item.transform.position);
+                if (d < bestDist && d < 20f) { bestDist = d; closest = item; }
+            }
+            if (closest != null) return closest.transform;
+        }
+
+        // Find closest closed/locked furniture that needs opening
+        if (autoOpen)
+        {
+            var furnitures = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
+            OpenableFurniture closestF = null;
+            float bestDist = float.MaxValue;
+            foreach (var f in furnitures)
+            {
+                if (f.IsOpen) continue;
+                float d = Vector3.Distance(transform.position, f.transform.position);
+                if (d < bestDist && d < 15f) { bestDist = d; closestF = f; }
+            }
+            if (closestF != null) return closestF.transform;
+
+            // Toolbox
+            var toolboxes = FindObjectsByType<ToolBoxInteractable>(FindObjectsSortMode.None);
+            foreach (var tb in toolboxes)
+            {
+                if (tb.IsOpen) continue;
+                float d = Vector3.Distance(transform.position, tb.transform.position);
+                if (d < bestDist && d < 15f) { bestDist = d; return tb.transform; }
+            }
+        }
+
+        // Hammer -> window logic
+        if (autoBreakWindow)
+        {
+            bool hasHammer = false;
+            if (carry != null && carry.IsCarrying)
+            {
+                if (carry.HeldItem != null && carry.HeldItem.ItemId.ToLower().Contains("hammer")) hasHammer = true;
+                if (carry.HeldInteractable != null && carry.HeldInteractable.name.ToLower().Contains("hammer")) hasHammer = true;
+            }
+            // Also check if hammer is in scene and we should get it
+            if (!hasHammer)
+            {
+                var hammerItems = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
+                foreach (var h in hammerItems)
+                {
+                    if (h.ItemId.ToLower().Contains("hammer") || h.name.ToLower().Contains("hammer"))
+                    {
+                        float d = Vector3.Distance(transform.position, h.transform.position);
+                        if (d < 20f) return h.transform;
+                    }
+                }
+                // Also Interactable hammer
+                var hammerInt = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
+                foreach (var hi in hammerInt)
+                {
+                    if (hi.name.ToLower().Contains("hammer"))
+                    {
+                        float d = Vector3.Distance(transform.position, hi.transform.position);
+                        if (d < 20f) return hi.transform;
+                    }
+                }
             }
             else
             {
-                _currentIndex++;
+                // Has hammer, go to window/glass
+                var glasses = FindObjectsByType<Glass>(FindObjectsSortMode.None);
+                Glass closestG = null;
+                float bestDist = float.MaxValue;
+                foreach (var g in glasses)
+                {
+                    float d = Vector3.Distance(transform.position, g.transform.position);
+                    if (d < bestDist) { bestDist = d; closestG = g; }
+                }
+                if (closestG != null) return closestG.transform;
+                if (windowLocation != null) return windowLocation;
             }
-
-            if (next != null) _agent.SetDestination(next.position);
-            TryInteract();
         }
+
+        // Fallback to preset locations in order
+        if (mode == TestMode.FullGameAuto || mode == TestMode.AutoPuzzleRoom1)
+        {
+            if (_currentIndex == 0 && mirrorKeyLocation != null) { _currentIndex++; return mirrorKeyLocation; }
+            if (_currentIndex == 1 && cabinetLocation != null) { _currentIndex++; return cabinetLocation; }
+            if (_currentIndex == 2 && placementTableLocation != null) { _currentIndex++; return placementTableLocation; }
+            if (_currentIndex == 3 && toolboxDrawerLocation != null) { _currentIndex++; return toolboxDrawerLocation; }
+            if (_currentIndex == 4 && toolboxLocation != null) { _currentIndex++; return toolboxLocation; }
+            if (_currentIndex == 5 && sofaHammerLocation != null) { _currentIndex++; return sofaHammerLocation; }
+            if (_currentIndex == 6 && windowLocation != null) { _currentIndex++; return windowLocation; }
+        }
+        else if (mode == TestMode.AutoPuzzleRoom2)
+        {
+            if (_currentIndex == 0 && toolboxDrawerLocation != null) { _currentIndex++; return toolboxDrawerLocation; }
+            if (_currentIndex == 1 && toolboxLocation != null) { _currentIndex++; return toolboxLocation; }
+            if (_currentIndex == 2 && sofaHammerLocation != null) { _currentIndex++; return sofaHammerLocation; }
+            if (_currentIndex == 3 && windowLocation != null) { _currentIndex++; return windowLocation; }
+        }
+
+        // Phone triggers as exploration
+        var triggers = FindObjectsByType<PhoneMessageTrigger>(FindObjectsSortMode.None);
+        if (triggers.Length > 0)
+        {
+            var closest = triggers[Random.Range(0, triggers.Length)];
+            float bestDist = float.MaxValue;
+            foreach (var t in triggers)
+            {
+                float d = Vector3.Distance(transform.position, t.transform.position);
+                if (d < bestDist && d > 2f) { bestDist = d; closest = t; }
+            }
+            return closest.transform;
+        }
+
+        return null;
     }
 
-    private void TryInteract()
+    private bool TryAutoInteract()
     {
-        var openable = FindClosestOpenable();
-        openable?.Interact();
+        bool did = false;
+        if (TryPickupClosest()) did = true;
+        if (TryPlaceInSlot()) did = true;
+        if (TryOpenClosest()) did = true;
+        if (TryBreakGlass()) did = true;
+        if (TryInteractClosestGeneric()) did = true;
+        return did;
     }
 
-    private GameAssets.Scripts.Environment.OpenableFurniture FindClosestOpenable()
+    private bool TryPickupClosest()
     {
-        var all = FindObjectsByType<GameAssets.Scripts.Environment.OpenableFurniture>(FindObjectsSortMode.None);
-        GameAssets.Scripts.Environment.OpenableFurniture closest = null;
+        if (!autoPickup) return false;
+        var carry = PlayerCarry.Instance;
+        if (carry != null && carry.IsCarrying) return false;
+
+        var items = FindObjectsByType<PlaceableItem>(FindObjectsSortMode.None);
+        PlaceableItem closest = null;
         float bestDist = float.MaxValue;
-        foreach (var o in all) { float d = Vector3.Distance(transform.position, o.transform.position); if (d < bestDist && d < 3f) { bestDist = d; closest = o; } }
-        return closest;
+        foreach (var item in items)
+        {
+            if (item.IsHeld) continue;
+            if (item.OccupyingSlot != null) continue;
+            float d = Vector3.Distance(transform.position, item.transform.position);
+            if (d < interactRange && d < bestDist) { bestDist = d; closest = item; }
+        }
+        if (closest != null)
+        {
+            Debug.Log($"[AutoPlayerMover] Auto pickup {closest.DisplayName}");
+            closest.OnInteract();
+            return true;
+        }
+
+        // Interactable version
+        var inters = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
+        Interactable closestI = null;
+        bestDist = float.MaxValue;
+        foreach (var inter in inters)
+        {
+            if (inter == null) continue;
+            // Skip if it's furniture
+            if (inter.GetComponent<OpenableFurniture>() != null) continue;
+            if (inter.GetComponent<ToolBoxInteractable>() != null) continue;
+            float d = Vector3.Distance(transform.position, inter.transform.position);
+            if (d < interactRange && d < bestDist) { bestDist = d; closestI = inter; }
+        }
+        if (closestI != null)
+        {
+            Debug.Log($"[AutoPlayerMover] Auto pickup Interactable {closestI.name}");
+            // Try via PlayerCarry
+            var pc = PlayerCarry.Instance;
+            if (pc != null) pc.TryPickUp(closestI);
+            else closestI.GetComponent<IInteractable>()?.OnInteract();
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryPlaceInSlot()
+    {
+        if (!autoPlace) return false;
+        var carry = PlayerCarry.Instance;
+        if (carry == null || !carry.IsCarrying) return false;
+
+        var slots = FindObjectsByType<PlacementSlot>(FindObjectsSortMode.None);
+        PlacementSlot closest = null;
+        float bestDist = float.MaxValue;
+        foreach (var slot in slots)
+        {
+            if (slot.IsOccupied) continue;
+            float d = Vector3.Distance(transform.position, slot.transform.position);
+            if (d < interactRange && d < bestDist) { bestDist = d; closest = slot; }
+        }
+        if (closest != null)
+        {
+            Debug.Log($"[AutoPlayerMover] Auto place into {closest.SlotId}");
+            closest.OnInteract();
+            return true;
+        }
+        return false;
+    }
+
+    private bool TryOpenClosest()
+    {
+        if (!autoOpen) return false;
+
+        // OpenableFurniture
+        var furnitures = FindObjectsByType<OpenableFurniture>(FindObjectsSortMode.None);
+        foreach (var f in furnitures)
+        {
+            float d = Vector3.Distance(transform.position, f.transform.position);
+            if (d < interactRange)
+            {
+                // Try to unlock with key if needed
+                if (f.IsLocked)
+                {
+                    // Try key from KeyRing or held
+                    if (f.GetComponent<ToolBoxInteractable>() == null)
+                    {
+                        // Try to find key
+                        var keyItems = FindObjectsByType<KeyItem>(FindObjectsSortMode.None);
+                        foreach (var k in keyItems)
+                        {
+                            if (Vector3.Distance(transform.position, k.transform.position) < 1f) continue;
+                            // If player has key, furniture will unlock on interact
+                        }
+                    }
+                }
+                Debug.Log($"[AutoPlayerMover] Auto interact furniture {f.name} locked={f.IsLocked} open={f.IsOpen}");
+                f.Interact();
+                return true;
+            }
+        }
+
+        // Toolbox
+        var toolboxes = FindObjectsByType<ToolBoxInteractable>(FindObjectsSortMode.None);
+        foreach (var tb in toolboxes)
+        {
+            float d = Vector3.Distance(transform.position, tb.transform.position);
+            if (d < interactRange)
+            {
+                Debug.Log($"[AutoPlayerMover] Auto interact toolbox {tb.name}");
+                tb.OnInteract();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryBreakGlass()
+    {
+        if (!autoBreakWindow) return false;
+        var glasses = FindObjectsByType<Glass>(FindObjectsSortMode.None);
+        foreach (var g in glasses)
+        {
+            float d = Vector3.Distance(transform.position, g.transform.position);
+            if (d < interactRange + 1f)
+            {
+                var carry = PlayerCarry.Instance;
+                bool hasHammer = false;
+                if (carry != null && carry.IsCarrying)
+                {
+                    if (carry.HeldItem != null && (carry.HeldItem.ItemId.ToLower().Contains("hammer") || carry.HeldItem.name.ToLower().Contains("hammer"))) hasHammer = true;
+                    if (carry.HeldInteractable != null && carry.HeldInteractable.name.ToLower().Contains("hammer")) hasHammer = true;
+                }
+                if (hasHammer || true) // try anyway, Glass checks tag
+                {
+                    Debug.Log($"[AutoPlayerMover] Auto break glass {g.name}");
+                    g.BreakFromHammer();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private bool TryInteractClosestGeneric()
+    {
+        var all = FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+        IInteractable closest = null;
+        float bestDist = float.MaxValue;
+        Vector3 pos = transform.position;
+        foreach (var mb in all)
+        {
+            if (mb is IInteractable inter)
+            {
+                if (!inter.CanInteract) continue;
+                // Skip already handled types
+                if (mb is PlacementSlot) continue;
+                if (mb is PlaceableItem) continue;
+                if (mb is OpenableFurniture) continue;
+                if (mb is ToolBoxInteractable) continue;
+                float d = Vector3.Distance(pos, mb.transform.position);
+                if (d < interactRange && d < bestDist) { bestDist = d; closest = inter; }
+            }
+        }
+        if (closest != null)
+        {
+            Debug.Log($"[AutoPlayerMover] Auto generic interact {closest}");
+            closest.OnInteract();
+            return true;
+        }
+        return false;
     }
 }
