@@ -18,7 +18,7 @@ public class Glass : MonoBehaviour
     [SerializeField] private string requiredTag = "Hammer";
     [SerializeField] private bool useGlassMaterial = true;
     [SerializeField] private bool spawnFractureOnBreak = true;
-    [SerializeField] private int fracturePieces = 12;
+    [SerializeField] private int pieces = 50;
     [SerializeField] private float fractureForce = 5f;
 
     [Header("Audio")]
@@ -115,26 +115,26 @@ public class Glass : MonoBehaviour
     private void OnCollisionEnter(Collision collision)
     {
         if (_isBroken) return;
-        if (!string.IsNullOrEmpty(requiredTag) && !collision.gameObject.CompareTag(requiredTag))
+        if (!string.IsNullOrEmpty(requiredTag) && collision.gameObject.CompareTag(requiredTag))
         {
             // Also check if held item has hammer tag
             var carry = GameAssets.Scripts.Puzzle.PlayerCarry.Instance;
             if (carry != null && carry.IsCarrying)
             {
-                bool hasHammerTag = false;
-                if (carry.HeldItem != null && carry.HeldItem.gameObject.CompareTag(requiredTag)) hasHammerTag = true;
-                if (carry.HeldInteractable != null && carry.HeldInteractable.gameObject.CompareTag(requiredTag)) hasHammerTag = true;
-                if (collision.gameObject == carry.HeldItem?.gameObject || collision.gameObject == carry.HeldInteractable?.gameObject) hasHammerTag = true;
-                if (!hasHammerTag) return;
+                // bool hasHammerTag = true;
+                // if (carry.HeldItem != null && carry.HeldItem.gameObject.CompareTag(requiredTag)) hasHammerTag = true;
+                // if (carry.HeldInteractable != null && carry.HeldInteractable.gameObject.CompareTag(requiredTag)) hasHammerTag = true;
+                // if (collision.gameObject == carry.HeldItem?.gameObject || collision.gameObject == carry.HeldInteractable?.gameObject) hasHammerTag = true;
+                // if (!hasHammerTag) return;
             }
             else
             {
                 return;
             }
-        }
-        if (collision.relativeVelocity.magnitude >= breakThreshold)
-        {
-            BreakGlass(collision.contacts.Length > 0 ? collision.contacts[0].point : transform.position);
+            if (collision.relativeVelocity.magnitude >= breakThreshold)
+            {
+                BreakGlass(collision.contacts.Length > 0 ? collision.contacts[0].point : transform.position);
+            }
         }
     }
 
@@ -179,7 +179,6 @@ public class Glass : MonoBehaviour
     {
         try
         {
-            int pieces = Mathf.Clamp(fracturePieces, 4, 20);
             for (int i = 0; i < pieces; i++)
             {
                 var shard = GameObject.CreatePrimitive(PrimitiveType.Cube);
