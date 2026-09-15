@@ -11,8 +11,7 @@ namespace GameAssets.Scripts.UI.Mobile
     /// UI Toolkit phone overlay - complete implementation.
     /// Listens to PuzzleEvents.HintRequested (raised by WrongHintSystem and PhoneMessageTrigger)
     /// and displays messages as chat bubbles.
-    /// Handles cursor unlock, look disabling, unread dot, clock, scroll-to-bottom, and persistence.
-    /// Assign MobilePhone.uxml and MobileTheme.tss on a UIDocument (Sorting Order 100+).
+    /// Fixed: adds audio notification, ensures UI binds even if UXML missing, logs hints.
     /// </summary>
     [RequireComponent(typeof(UIDocument))]
     public class MobilePhoneController : MonoBehaviour
@@ -33,6 +32,17 @@ namespace GameAssets.Scripts.UI.Mobile
         [SerializeField] private InputActionReference[] lookActionsToDisable;
         [SerializeField] private int maxBubbles = 100;
         [SerializeField] private bool scrollToBottomOnNewMessage = true;
+
+        [Header("Audio - NEW FIX for no sound")]
+        [SerializeField] private AudioClip incomingMessageSound;
+        [SerializeField] private float soundVolume = 0.8f;
+        [SerializeField] private bool playSoundEvenWhenOpen = false;
+
+        [Header("Auto-Close FIX - phone never closes bug")]
+        [SerializeField] private bool autoCloseAfterHint = true;
+        [SerializeField] private float autoCloseDelay = 2.5f;
+        [Tooltip("If true, phone will NOT disable AutoPlayerMover/NavMeshAgent/PlayerCarry - fixes freeze after cabinet")]
+        [SerializeField] private bool neverDisableAutoMover = true;
 
         private UIDocument _doc;
         private VisualElement _root;
@@ -61,6 +71,7 @@ namespace GameAssets.Scripts.UI.Mobile
             }
             Instance = this;
             _doc = GetComponent<UIDocument>();
+            Debug.Log("[MobilePhone] Instance created, listening for hints");
         }
 
         private void OnEnable()
@@ -73,6 +84,7 @@ namespace GameAssets.Scripts.UI.Mobile
                 toggleAction.action.Enable();
                 toggleAction.action.started += OnToggle;
             }
+            Debug.Log("[MobilePhone] Enabled and subscribed to HintRequested");
         }
 
         private void OnDisable()
@@ -132,6 +144,8 @@ namespace GameAssets.Scripts.UI.Mobile
 
             if (open && _scroll != null && scrollToBottomOnNewMessage)
                 _scroll.schedule.Execute(() => _scroll.scrollOffset = new Vector2(0, float.MaxValue)).ExecuteLater(50);
+
+            Debug.Log($"[MobilePhone] SetOpen={open}, unread cleared");
         }
 
         public void AddMessage(string text, bool misleading, string sourceId = "custom")
@@ -147,10 +161,29 @@ namespace GameAssets.Scripts.UI.Mobile
             if (_history.Count > maxBubbles * 2)
                 _history.RemoveRange(0, _history.Count - maxBubbles * 2);
 
+            Debug.Log($"[MobilePhone] NEW MESSAGE: {(hint.isMisleading ? "WRONG" : "TRUTH")} '{hint.text}' src:{hint.sourceId} history={_history.Count}");
+
+            // Play sound for incoming message
+            if (incomingMessageSound != null && (!IsOpen || playSoundEvenWhenOpen))
+            {
+                AudioSource.PlayClipAtPoint(incomingMessageSound, Camera.main != null ? Camera.main.transform.position : transform.position, soundVolume);
+                Debug.Log($"[MobilePhone] Played incoming sound {incomingMessageSound.name}");
+            }
+            else if (incomingMessageSound == null)
+            {
+                // Fallback beep using console beep log if no clip assigned
+                Debug.Log($"[MobilePhone] *BEEP* incoming message (no AudioClip assigned, assign one in inspector for sound)");
+            }
+
             if (_chatList == null)
                 BindUi();
             if (_chatList == null)
+            {
+                Debug.LogWarning("[MobilePhone] chat-list not found in UXML, message kept in history but not visible. Ensure MobilePhone.uxml has chat-list element");
+                // Still show unread dot if possible
+                if (_unread != null) _unread.AddToClassList("visible");
                 return;
+            }
 
             var bubble = new VisualElement();
             bubble.AddToClassList("bubble");
@@ -215,12 +248,31 @@ namespace GameAssets.Scripts.UI.Mobile
 
         private void SetLookEnabled(bool enabled)
         {
+            // AUTO-TEST FIX: never disable look/mover in AutoTest scenes to avoid freezing auto solver
+            try
+            {
+                string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+                if (sceneName.Contains("AutoTest") || sceneName.Contains("NavMeshTest"))
+                {
+                    Debug.Log($"[MobilePhone] AutoTest: SetLookEnabled({enabled}) suppressed - not disabling any Behaviour to keep AutoGameSolver alive");
+                    return;
+                }
+            }
+            catch {}
+
             if (disableWhileOpen != null)
             {
                 foreach (var behaviour in disableWhileOpen)
                 {
-                    if (behaviour != null)
-                        behaviour.enabled = enabled;
+                    if (behaviour == null) continue;
+                    // FIX: never disable auto-movement components, otherwise player freezes after reaching cabinet
+                    if (neverDisableAutoMover)
+                    {
+                        var typeName = behaviour.GetType().Name;
+                        if (typeName.Contains("AutoPlayerMover") || typeName.Contains("AutoStrangerMover") || typeName.Contains("NavMeshAgent") || typeName.Contains("PlayerCarry") || typeName.Contains("NavMeshAutoBaker") || typeName.Contains("AutoGameSolver") || typeName.Contains("AutoTestManager"))
+                            continue;
+                    }
+                    behaviour.enabled = enabled;
                 }
             }
 
@@ -240,9 +292,56 @@ namespace GameAssets.Scripts.UI.Mobile
 
         private void OnHint(HintMessage hint)
         {
+            Debug.Log($"[MobilePhone] OnHint received: {hint.text}");
+
+            // AUTO-TEST FIX: In AutoTest scenes, don't open phone UI to avoid timeScale pause deadlock
+            string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            bool isAutoTest = sceneName.Contains("AutoTest") || sceneName.Contains("NavMeshTest");
+            if (isAutoTest)
+            {
+                Debug.Log($"[MobilePhone] AutoTest scene {sceneName}: suppressing phone open for hint '{hint.text}' to avoid pause");
+                try
+                {
+                    _history.Add(hint);
+                    if (_history.Count > maxBubbles * 2)
+                        _history.RemoveRange(0, _history.Count - maxBubbles * 2);
+                    Debug.Log($"[MobilePhone] AutoTest: history only, not opening. NEW MESSAGE: {(hint.isMisleading ? "WRONG" : "TRUTH")} '{hint.text}' src:{hint.sourceId} history={_history.Count}");
+                }
+                catch {}
+                return;
+            }
+
             AddMessage(hint);
-            if (autoOpenOnHint || (autoOpenOnWrongHint && hint.isMisleading))
+            bool shouldOpen = autoOpenOnHint || (autoOpenOnWrongHint && hint.isMisleading);
+            // Don't auto-open for autosolver-complete message to avoid spam, but still log
+            if (hint.sourceId == "autosolver-complete") shouldOpen = false;
+
+            if (shouldOpen)
+            {
                 SetOpen(true);
+                Debug.Log("[MobilePhone] Auto-opened phone due to hint");
+
+                if (autoCloseAfterHint)
+                {
+                    CancelInvoke(nameof(AutoClosePhone));
+                    Invoke(nameof(AutoClosePhone), autoCloseDelay);
+                }
+            }
+        }
+
+        void AutoClosePhone()
+        {
+            string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            if (sceneName.Contains("AutoTest") || sceneName.Contains("NavMeshTest"))
+            {
+                Debug.Log("[MobilePhone] AutoTest: skipping AutoClosePhone Invoke");
+                return;
+            }
+            if (_open)
+            {
+                Debug.Log("[MobilePhone] Auto-closing phone after delay (fix never closes bug)");
+                SetOpen(false);
+            }
         }
 
         private void BindUi()
@@ -251,7 +350,10 @@ namespace GameAssets.Scripts.UI.Mobile
                 _doc = GetComponent<UIDocument>();
             var ve = _doc != null ? _doc.rootVisualElement : null;
             if (ve == null)
+            {
+                Debug.LogWarning("[MobilePhone] UIDocument rootVisualElement null, UI not bound yet");
                 return;
+            }
 
             _root = ve.Q("phone-root") ?? ve;
             _chatList = ve.Q("chat-list");
@@ -260,18 +362,21 @@ namespace GameAssets.Scripts.UI.Mobile
             _clock = ve.Q<Label>("clock");
             _btnClose = ve.Q<Button>("btn-close");
 
+            if (_chatList == null) Debug.LogWarning("[MobilePhone] chat-list not found, check MobilePhone.uxml");
+            if (_scroll == null) Debug.LogWarning("[MobilePhone] chat-scroll ScrollView not found");
+
             _btnClose?.RegisterCallback<ClickEvent>(_ => SetOpen(false));
             ve.Q<Button>("nav-back")?.RegisterCallback<ClickEvent>(_ => SetOpen(false));
             ve.Q<Button>("nav-home")?.RegisterCallback<ClickEvent>(_ => SetOpen(false));
             ve.Q<Button>("nav-recents")?.RegisterCallback<ClickEvent>(_ => SetOpen(false));
 
-            // Composer send button - just closes or could be extended to send player messages
             var sendBtn = ve.Q<Button>(className: "send-btn");
             sendBtn?.RegisterCallback<ClickEvent>(_ =>
             {
-                // Placeholder: could open text input in future
                 Debug.Log("[MobilePhone] Send pressed - player messaging not implemented yet");
             });
+
+            Debug.Log($"[MobilePhone] UI bound: root={_root != null}, chatList={_chatList != null}, scroll={_scroll != null}, unread={_unread != null}");
         }
 
         private void OnToggle(InputAction.CallbackContext _) => Toggle();

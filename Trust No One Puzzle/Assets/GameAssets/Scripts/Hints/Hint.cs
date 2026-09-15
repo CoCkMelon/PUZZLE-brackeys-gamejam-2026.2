@@ -9,8 +9,13 @@ namespace GameAssets.Scripts.Hints
 
         public string HintText
         {
-            get => hintText.text;
-            set => hintText.text = value;
+            get => hintText != null ? hintText.text : "";
+            set { if (hintText != null) hintText.text = value; }
+        }
+
+        private void Reset()
+        {
+            if (hintText == null) hintText = GetComponentInChildren<TMP_Text>();
         }
     }
 }
