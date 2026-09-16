@@ -15967,11 +15967,6 @@ GameObject:
   m_CorrespondingSourceObject: {fileID: 3418188896726377254, guid: 6eb3d562858b87fa99d73d6c913ac81b, type: 3}
   m_PrefabInstance: {fileID: 609256649}
   m_PrefabAsset: {fileID: 0}
---- !u!54 &609256653 stripped
-Rigidbody:
-  m_CorrespondingSourceObject: {fileID: 8661208540282744670, guid: 6eb3d562858b87fa99d73d6c913ac81b, type: 3}
-  m_PrefabInstance: {fileID: 609256649}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1 &614390271
 GameObject:
   m_ObjectHideFlags: 0
@@ -40322,7 +40317,7 @@ MonoBehaviour:
   requiredKeyId: 
   unlockWithKey: 1
   keyAccess: 2
-  consumeKey: 1
+  consumeKey: 0
   openWhenUnlocked: 1
   relockOnClose: 0
   unlockSound: {fileID: 0}
@@ -60954,7 +60949,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 6394494673453604886}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e5c357f9f3ce4c58b91f24954388e2f9, type: 3}
   m_Name: 
@@ -61077,19 +61072,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bc8669f4ee8be86caa10415b2defc060, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.RequireCarriedItemRigidbody
-  targetRigidbody: {fileID: 609256653}
-  mode: 1
-  wakeUpOnEnable: 1
+  cabinetRigidbody: {fileID: 7076101939358636472}
   requiredObject: {fileID: 609256651}
-  requiredItemId: Real Key
-  keyAccess: 2
-  requireProximity: 1
-  activationDistance: 3.5
-  playerTransform: {fileID: 374377245}
-  onPhysicsEnabled:
-    m_PersistentCalls:
-      m_Calls: []
-  onPhysicsDisabled:
+  requiredItemId: 
+  requiredItemName: Real Key
+  consumeRequiredItem: 0
+  onlyOnce: 1
+  unlockSound: {fileID: 8300000, guid: 0b77b17a92decff4986e6155cc25ff52, type: 3}
+  disableTriggerAfterUse: 1
+  OnUnlocked:
     m_PersistentCalls:
       m_Calls: []
 --- !u!1 &7151976852516595300
