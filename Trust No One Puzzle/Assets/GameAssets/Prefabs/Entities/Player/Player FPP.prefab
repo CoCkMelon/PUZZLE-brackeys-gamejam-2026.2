@@ -11,7 +11,7 @@ GameObject:
   - component: {fileID: 9158682244753153098}
   m_Layer: 0
   m_Name: Player FPP
-  m_TagString: Untagged
+  m_TagString: Player
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -432,8 +432,6 @@ MonoBehaviour:
   maxReleaseSpeed: 3
   maxCarrySpeed: 10
   maxCarryAngularSpeed: 720
-  interactableScaleMultiplier: 0.65
-  interactableFollowTimeScale: 1
   stuckDropGap: 0.5
   stuckDropDelay: 0.7
   carryBreakDistance: 4

@@ -45,13 +45,6 @@ namespace GameAssets.Scripts.Environment
             if (cabinetRigidbody == null)
                 cabinetRigidbody = GetComponentInParent<Rigidbody>();
 
-            // Force this collider to be a trigger
-            Collider col = GetComponent<Collider>();
-            if (col != null && !col.isTrigger)
-            {
-                col.isTrigger = true;
-            }
-
             // Keep cabinet locked at start
             if (cabinetRigidbody != null)
             {
@@ -100,6 +93,43 @@ namespace GameAssets.Scripts.Environment
                     // if (disableTriggerAfterUse)
                         // gameObject.SetActive(false);
                 // }
+            }
+        }
+        private void OnTriggerEnter(Collider other)
+        {
+            if (_used) return;
+
+            if (IsMatching(other.gameObject))
+            {
+                // VERY IMPORTANT: If player is currently carrying this object, force drop it
+                PlayerCarry carry = PlayerCarry.Instance;
+                if (carry != null && carry.HeldItem != null)
+                {
+                    if (carry.HeldItem.gameObject == other.gameObject)
+                    {
+                        carry.TakeHeldItem();
+                    }
+                }
+
+                // Enable Rigidbody Physics (Unlock the door)
+                if (cabinetRigidbody != null)
+                {
+                    cabinetRigidbody.isKinematic = false;
+                    cabinetRigidbody.WakeUp();
+                    gameObject.layer = LayerMask.NameToLayer("Interactable");
+                }
+
+                if (unlockSound != null)
+                    AudioSource.PlayClipAtPoint(unlockSound, transform.position);
+
+                OnUnlocked?.Invoke();
+
+                if (consumeRequiredItem)
+                {
+                    Destroy(other.gameObject);
+                }
+
+                _used = true;
             }
         }
 
