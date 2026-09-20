@@ -1,39 +1,33 @@
 using UnityEngine;
 using UnityEngine.Events;
-using GameAssets.Scripts.Interaction;
 using GameAssets.Scripts.Puzzle;
-using GameAssets.Scripts.Entities.Player;
 
 namespace GameAssets.Scripts.Environment
 {
     /// <summary>
-    /// Enables a Rigidbody's physics when the required carried/pickup object enters the trigger.
-    /// Perfect for cabinets with Rigidbody + HingeJoint. Keeps door locked until item is inserted.
-    /// Automatically drops the item from PlayerCarry if the player is holding it.
+    /// Enables a Rigidbody's physics when the required object touches this trigger/collider.
+    /// Cabinet door stays kinematic (locked) until the key item is inserted.
+    /// If the player is carrying that exact object, it is force-released first.
     /// </summary>
     public class RigidbodyUnlockByCollision : MonoBehaviour
     {
         [Header("Target Rigidbody")]
-        [Tooltip("The Rigidbody to enable physics on (Usually the Cabinet Door).")]
+        [Tooltip("The Rigidbody to unlock (usually the cabinet door with the HingeJoint).")]
         [SerializeField] private Rigidbody cabinetRigidbody;
 
         [Header("Required Item")]
-        [Tooltip("Specific pickup GameObject reference.")]
+        [Tooltip("Specific pickup GameObject reference (children count too).")]
         [SerializeField] private GameObject requiredObject;
-        [Tooltip("Match by PlaceableItem, KeyItem or FurnitureKey ID.")]
-        [SerializeField] private string requiredItemId;
-        [Tooltip("Match by Interactable Display Name (Recommended for your system).")]
-        [SerializeField] private string requiredItemName;
+        [Tooltip("Optional fallback: any object with this tag unlocks. Leave empty to disable.")]
+        [SerializeField] private string requiredTag = "";
 
         [Header("Settings")]
-        [Tooltip("Destroy/Consume the inserted item after unlocking?")]
         [SerializeField] private bool consumeRequiredItem = true;
-        [Tooltip("Can only be used once?")]
         [SerializeField] private bool onlyOnce = true;
-        [Tooltip("Play unlock sound at this trigger position.")]
+        [SerializeField] private bool disableColliderAfterUse = true;
+        [Tooltip("Layer applied to the door after unlocking. Empty = keep current layer.")]
+        [SerializeField] private string unlockedLayer = "Interactable";
         [SerializeField] private AudioClip unlockSound;
-        [Tooltip("Disable this trigger after use?")]
-        [SerializeField] private bool disableTriggerAfterUse = true;
 
         [Header("Events")]
         public UnityEvent OnUnlocked;
@@ -42,113 +36,65 @@ namespace GameAssets.Scripts.Environment
 
         private void Awake()
         {
-            if (cabinetRigidbody == null)
-                cabinetRigidbody = GetComponentInParent<Rigidbody>();
+            if (cabinetRigidbody == null) cabinetRigidbody = GetComponentInParent<Rigidbody>();
+            if (cabinetRigidbody != null) cabinetRigidbody.isKinematic = true; // locked at start
+        }
 
-            // Keep cabinet locked at start
-            if (cabinetRigidbody != null)
+        private void OnTriggerEnter(Collider other) => TryUnlock(other.gameObject);
+        private void OnCollisionEnter(Collision collision) => TryUnlock(collision.gameObject);
+
+        private void TryUnlock(GameObject candidate)
+        {
+            if (_used && onlyOnce) return;
+
+            var matched = ResolveMatch(candidate);
+            if (matched == null) return;
+
+
+            Unlock();
+
+            if (unlockSound != null)
+                AudioSource.PlayClipAtPoint(unlockSound, transform.position);
+
+            OnUnlocked?.Invoke();
+
+            if (consumeRequiredItem) Destroy(matched);
+
+            _used = true;
+            if (onlyOnce && disableColliderAfterUse)
             {
-                cabinetRigidbody.isKinematic = true;
+                foreach (var col in GetComponents<Collider>())
+                    col.enabled = false;
             }
         }
 
-        private void OnCollisionEnter(Collision other)
+        private void Unlock()
         {
-            if (_used) return;
+            if (cabinetRigidbody == null) return;
 
-            if (IsMatching(other.gameObject))
+            cabinetRigidbody.isKinematic = false;
+            cabinetRigidbody.WakeUp();
+
+            if (!string.IsNullOrEmpty(unlockedLayer))
             {
-                // VERY IMPORTANT: If player is currently carrying this object, force drop it
-                PlayerCarry carry = PlayerCarry.Instance;
-                if (carry != null && carry.HeldItem != null)
-                {
-                    if (carry.HeldItem.gameObject == other.gameObject)
-                    {
-                        carry.TakeHeldItem();
-                    }
-                }
-
-                // Enable Rigidbody Physics (Unlock the door)
-                if (cabinetRigidbody != null)
-                {
-                    cabinetRigidbody.isKinematic = false;
-                    cabinetRigidbody.WakeUp();
-                    gameObject.layer = LayerMask.NameToLayer("Interactable");
-                }
-
-                if (unlockSound != null)
-                    AudioSource.PlayClipAtPoint(unlockSound, transform.position);
-
-                OnUnlocked?.Invoke();
-
-                if (consumeRequiredItem)
-                {
-                    Destroy(other.gameObject);
-                }
-
-                // if (onlyOnce)
-                // {
-                    _used = true;
-
-                    // if (disableTriggerAfterUse)
-                        // gameObject.SetActive(false);
-                // }
-            }
-        }
-        private void OnTriggerEnter(Collider other)
-        {
-            if (_used) return;
-
-            if (IsMatching(other.gameObject))
-            {
-                // VERY IMPORTANT: If player is currently carrying this object, force drop it
-                PlayerCarry carry = PlayerCarry.Instance;
-                if (carry != null && carry.HeldItem != null)
-                {
-                    if (carry.HeldItem.gameObject == other.gameObject)
-                    {
-                        carry.TakeHeldItem();
-                    }
-                }
-
-                // Enable Rigidbody Physics (Unlock the door)
-                if (cabinetRigidbody != null)
-                {
-                    cabinetRigidbody.isKinematic = false;
-                    cabinetRigidbody.WakeUp();
-                    gameObject.layer = LayerMask.NameToLayer("Interactable");
-                }
-
-                if (unlockSound != null)
-                    AudioSource.PlayClipAtPoint(unlockSound, transform.position);
-
-                OnUnlocked?.Invoke();
-
-                if (consumeRequiredItem)
-                {
-                    Destroy(other.gameObject);
-                }
-
-                _used = true;
+                int layer = LayerMask.NameToLayer(unlockedLayer);
+                if (layer >= 0) cabinetRigidbody.gameObject.layer = layer;
+                else Debug.LogWarning($"[RigidbodyUnlockByCollision] Layer '{unlockedLayer}' does not exist.", this);
             }
         }
 
-        private bool IsMatching(GameObject candidate)
+        private GameObject ResolveMatch(GameObject candidate)
         {
-            if (candidate == null) return false;
+            if (candidate == null) return null;
 
-            // 1. Direct GameObject Reference (Highest Priority)
-            if (requiredObject != null)
-            {
-                if (candidate == requiredObject)
-                    return true;
+            if (requiredObject != null &&
+                (candidate == requiredObject || candidate.transform.IsChildOf(requiredObject.transform)))
+                return requiredObject;
 
-                if (candidate.transform.IsChildOf(requiredObject.transform))
-                    return true;
-            }
+            if (!string.IsNullOrEmpty(requiredTag) && candidate.CompareTag(requiredTag))
+                return candidate;
 
-
-            return false;
+            return null;
         }
     }
 }

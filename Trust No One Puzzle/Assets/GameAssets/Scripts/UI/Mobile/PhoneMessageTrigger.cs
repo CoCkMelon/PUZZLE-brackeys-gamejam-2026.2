@@ -5,7 +5,7 @@ using GameAssets.Scripts.Puzzle;
 namespace GameAssets.Scripts.UI.Mobile
 {
     /// <summary>
-    /// Sends messages to the phone messenger (MobilePhoneController via PuzzleEvents.HintRequested)
+    /// Sends messages to the phone messenger (MobilePhoneController via WrongHintSystem)
     /// based on triggers. This completes the missing wiring for UI Toolkit phone.
     /// 
     /// Can be triggered by:
@@ -88,8 +88,6 @@ namespace GameAssets.Scripts.UI.Mobile
                     WrongHintSystem.Instance.SendHintById(hintId);
                 else
                 {
-                    // Fallback: raise directly if WrongHintSystem not in scene
-                    PuzzleEvents.RaiseHint(new HintMessage { text = $"[Missing WrongHintSystem] id:{hintId}", isMisleading = isMisleading, sourceId = sourceId });
                     Debug.LogWarning($"[PhoneMessageTrigger] WrongHintSystem.Instance not found, cannot send id '{hintId}'");
                 }
             }
@@ -97,8 +95,6 @@ namespace GameAssets.Scripts.UI.Mobile
             {
                 if (WrongHintSystem.Instance != null)
                     WrongHintSystem.Instance.SendCustom(customText, isMisleading, sourceId);
-                else
-                    PuzzleEvents.RaiseHint(new HintMessage { text = customText, isMisleading = isMisleading, sourceId = sourceId });
             }
             else
             {

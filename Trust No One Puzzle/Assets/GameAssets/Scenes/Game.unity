@@ -21790,15 +21790,9 @@ MonoBehaviour:
   - id: msg-14-trust-no-one
     text: Use key to open drawer. Place objects on table. Trust no one.
     isMisleading: 1
-    triggerOnWrongSlotId: 
-    triggerOnCorrectSlotId: 
-    triggerOnDrawerId: 
-  sendRandomWrongHintOnWrongPlacement: 1
-  wrongHintChance: 0.7
   neverRepeat: 1
   logToConsole: 1
-  genericWrongHint: Put it in the other drawer. Trust me.
-  genericCorrectHint: That looks right. Keep going.
+  phone: {fileID: 0}
 --- !u!4 &803057056
 Transform:
   m_ObjectHideFlags: 0
@@ -24110,26 +24104,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ea67cc628d3e264abbcb821bf29702ea, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Puzzle.PlacementSlot
-  slotId: Candle_low (1)
-  requiredItemId: Candle_low
-  snapPoint: {fileID: 862472255}
-  allowWrongItems: 1
-  lockWhenCorrect: 1
-  OnCorrectPlacement:
-    m_PersistentCalls:
-      m_Calls: []
-  OnWrongPlacement:
-    m_PersistentCalls:
-      m_Calls: []
-  OnItemRemoved:
-    m_PersistentCalls:
-      m_Calls: []
-  OnSlotSolved:
-    m_PersistentCalls:
-      m_Calls: []
-  OnWrongItemRejected:
-    m_PersistentCalls:
-      m_Calls: []
+  tpm: {fileID: 0}
 --- !u!1 &868559086
 GameObject:
   m_ObjectHideFlags: 0
@@ -26344,47 +26319,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c2ee023e7ec24c7485aac0abfde4271e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Hints.Trigger
-  playerTag: Player
-  acceptAnyPlayerCollider: 1
-  triggerOnce: 1
-  delay: 0
-  OnEnter:
-    m_PersistentCalls:
-      m_Calls:
-      - m_Target: {fileID: 0}
-        m_TargetAssemblyTypeName: GameAssets.Scripts.Puzzle.WrongHintSystem, Assembly-CSharp
-        m_MethodName: SpawnHint
-        m_Mode: 3
-        m_Arguments:
-          m_ObjectArgument: {fileID: 0}
-          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
-          m_IntArgument: 0
-          m_FloatArgument: 0
-          m_StringArgument: 
-          m_BoolArgument: 0
-        m_CallState: 2
-      - m_Target: {fileID: 958350350}
-        m_TargetAssemblyTypeName: UnityEngine.GameObject, UnityEngine
-        m_MethodName: SetActive
-        m_Mode: 6
-        m_Arguments:
-          m_ObjectArgument: {fileID: 0}
-          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
-          m_IntArgument: 0
-          m_FloatArgument: 0
-          m_StringArgument: 
-          m_BoolArgument: 0
-        m_CallState: 2
-  OnExit:
-    m_PersistentCalls:
-      m_Calls: []
-  OnStay:
-    m_PersistentCalls:
-      m_Calls: []
-  hintId: sus
-  customMessage: AMOGUS
-  isMisleading: 0
-  sourceId: trigger
 --- !u!65 &958350353
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -29781,26 +29715,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ea67cc628d3e264abbcb821bf29702ea, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Puzzle.PlacementSlot
-  slotId: Vase (1)
-  requiredItemId: Vase
-  snapPoint: {fileID: 1074831204}
-  allowWrongItems: 1
-  lockWhenCorrect: 1
-  OnCorrectPlacement:
-    m_PersistentCalls:
-      m_Calls: []
-  OnWrongPlacement:
-    m_PersistentCalls:
-      m_Calls: []
-  OnItemRemoved:
-    m_PersistentCalls:
-      m_Calls: []
-  OnSlotSolved:
-    m_PersistentCalls:
-      m_Calls: []
-  OnWrongItemRejected:
-    m_PersistentCalls:
-      m_Calls: []
+  tpm: {fileID: 0}
 --- !u!1 &1078516851
 GameObject:
   m_ObjectHideFlags: 0
@@ -30397,26 +30312,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ea67cc628d3e264abbcb821bf29702ea, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Puzzle.PlacementSlot
-  slotId: Puzzle book (1)
-  requiredItemId: Puzzle book
-  snapPoint: {fileID: 1084392287}
-  allowWrongItems: 1
-  lockWhenCorrect: 1
-  OnCorrectPlacement:
-    m_PersistentCalls:
-      m_Calls: []
-  OnWrongPlacement:
-    m_PersistentCalls:
-      m_Calls: []
-  OnItemRemoved:
-    m_PersistentCalls:
-      m_Calls: []
-  OnSlotSolved:
-    m_PersistentCalls:
-      m_Calls: []
-  OnWrongItemRejected:
-    m_PersistentCalls:
-      m_Calls: []
+  tpm: {fileID: 0}
 --- !u!1 &1097404564
 GameObject:
   m_ObjectHideFlags: 0
@@ -35669,9 +35565,6 @@ MonoBehaviour:
   onPuzzleSolved:
     m_PersistentCalls:
       m_Calls: []
-  itemLayers:
-    serializedVersion: 2
-    m_Bits: 4294967295
 --- !u!1 &1325147048
 GameObject:
   m_ObjectHideFlags: 0
@@ -43665,47 +43558,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c2ee023e7ec24c7485aac0abfde4271e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Hints.Trigger
-  playerTag: Player
-  acceptAnyPlayerCollider: 1
-  triggerOnce: 1
-  delay: 0
-  OnEnter:
-    m_PersistentCalls:
-      m_Calls:
-      - m_Target: {fileID: 803057055}
-        m_TargetAssemblyTypeName: GameAssets.Scripts.Puzzle.WrongHintSystem, Assembly-CSharp
-        m_MethodName: SendCustomFromTrigger
-        m_Mode: 5
-        m_Arguments:
-          m_ObjectArgument: {fileID: 0}
-          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
-          m_IntArgument: 0
-          m_FloatArgument: 0
-          m_StringArgument: Place objects on table
-          m_BoolArgument: 0
-        m_CallState: 2
-      - m_Target: {fileID: 1600080418}
-        m_TargetAssemblyTypeName: UnityEngine.GameObject, UnityEngine
-        m_MethodName: SetActive
-        m_Mode: 6
-        m_Arguments:
-          m_ObjectArgument: {fileID: 0}
-          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
-          m_IntArgument: 0
-          m_FloatArgument: 0
-          m_StringArgument: 
-          m_BoolArgument: 0
-        m_CallState: 2
-  OnExit:
-    m_PersistentCalls:
-      m_Calls: []
-  OnStay:
-    m_PersistentCalls:
-      m_Calls: []
-  hintId: 
-  customMessage: 
-  isMisleading: 0
-  sourceId: trigger
 --- !u!65 &1600080420
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -63080,12 +62932,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.RequireCarriedItemRigidbody
   cabinetRigidbody: {fileID: 6796056962769134947}
   requiredObject: {fileID: 609256651}
-  requiredItemId: 
-  requiredItemName: Real Key
+  requiredTag: 
   consumeRequiredItem: 0
   onlyOnce: 1
+  disableColliderAfterUse: 0
+  unlockedLayer: Interactable
   unlockSound: {fileID: 8300000, guid: 0b77b17a92decff4986e6155cc25ff52, type: 3}
-  disableTriggerAfterUse: 0
   OnUnlocked:
     m_PersistentCalls:
       m_Calls: []
@@ -63656,12 +63508,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.RequireCarriedItemRigidbody
   cabinetRigidbody: {fileID: 7076101939358636472}
   requiredObject: {fileID: 609256651}
-  requiredItemId: 
-  requiredItemName: Real Key
+  requiredTag: 
   consumeRequiredItem: 0
   onlyOnce: 1
+  disableColliderAfterUse: 1
+  unlockedLayer: Interactable
   unlockSound: {fileID: 8300000, guid: 0b77b17a92decff4986e6155cc25ff52, type: 3}
-  disableTriggerAfterUse: 0
   OnUnlocked:
     m_PersistentCalls:
       m_Calls: []
@@ -65936,12 +65788,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GameAssets.Scripts.Environment.RequireCarriedItemRigidbody
   cabinetRigidbody: {fileID: 8797224718651915129}
   requiredObject: {fileID: 609256651}
-  requiredItemId: 
-  requiredItemName: Real Key
+  requiredTag: 
   consumeRequiredItem: 0
   onlyOnce: 1
+  disableColliderAfterUse: 0
+  unlockedLayer: Interactable
   unlockSound: {fileID: 8300000, guid: 0b77b17a92decff4986e6155cc25ff52, type: 3}
-  disableTriggerAfterUse: 0
   OnUnlocked:
     m_PersistentCalls:
       m_Calls: []

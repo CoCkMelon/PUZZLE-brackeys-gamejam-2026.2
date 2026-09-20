@@ -5,9 +5,9 @@ using GameAssets.Scripts.Entities;
 namespace GameAssets.Scripts.Puzzle
 {
     /// <summary>
-    /// Best carry - force/torque limited, supports both PlaceableItem and Interactable.
-    /// Configurable controls, scroll distance, plane shove with flipped X/Y (X->forward, Y->up) and no camera rotation during shove.
-    /// LMB releases without throw.
+    /// Physics carry for Interactable objects (PlaceableItem/PuzzleEvents system removed).
+    /// Force/torque limited so carried items can never push through geometry.
+    /// LMB or G releases without throwing. MMB (configurable) = spatial shove mode.
     /// </summary>
     public class PlayerCarry : MonoBehaviour
     {
@@ -19,10 +19,9 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private Camera viewCamera;
         [SerializeField] private InputActionReference dropAction;
         [SerializeField] private InputActionReference spatialModeAction;
-        [SerializeField] private InputActionReference scrollAction; // optional, if null uses Mouse scroll
+        [SerializeField] private InputActionReference scrollAction; // optional, falls back to Mouse scroll
 
         [Header("Carry force limits - prevents penetration")]
-        [Tooltip("Strongest push (N) the carry can apply. This is also max force item can press against wall.")]
         [SerializeField, Min(1f)] private float maxCarryForce = 300f;
         [SerializeField, Min(0.1f)] private float maxCarryTorque = 30f;
         [SerializeField, Min(1f)] private float maxCarryAcceleration = 60f;
@@ -32,37 +31,40 @@ namespace GameAssets.Scripts.Puzzle
         [SerializeField] private float maxCarrySpeed = 10f;
         [SerializeField] private float maxCarryAngularSpeed = 720f;
 
-        [Header("Carry - Interactable support")]
-        // Scale fix: previously shrank to 0.65, now kept at 1. No scaling while carried.
-
         [Header("Auto-drop")]
         [SerializeField] private float stuckDropGap = 0.5f;
         [SerializeField] private float stuckDropDelay = 0.7f;
         [SerializeField] private float carryBreakDistance = 4f;
 
-        [Header("Spatial move - configurable")]
+        [Header("Spatial move")]
         [SerializeField] private float scrollMetersPerNotch = 0.35f;
         [SerializeField] private float planeDragSensitivity = 0.008f;
         [SerializeField] private float minHoldDistance = 0.6f;
         [SerializeField] private float maxHoldDistance = 4f;
         [SerializeField] private float defaultHoldDistance = 1.6f;
-        [Tooltip("Flip X/Y: true = X->forward, Y->up (intuitive), false = old X->up, Y->forward")]
+        [Tooltip("true = X->forward, Y->up (intuitive)")]
         [SerializeField] private bool flipPlanarAxes = true;
         [SerializeField] private bool spatialModeRequiresMMB = true;
 
-        // Public state
-        public PlaceableItem HeldItem { get; private set; }
+        [Header("Release keys")]
+        [SerializeField] private bool leftClickDrops = true;
+        [SerializeField] private bool gKeyDrops = true;
+
+        // ---------- Public state ----------
         public Interactable HeldInteractable { get; private set; }
-        public bool IsCarrying => HeldItem != null || HeldInteractable != null;
+        /// <summary>Compatibility alias for old code that used PlaceableItem HeldItem.</summary>
+        public Interactable HeldItem => HeldInteractable;
+        public GameObject HeldObject => HeldInteractable != null ? HeldInteractable.gameObject : null;
+        public bool IsCarrying => HeldInteractable != null;
         public bool SpatialModeActive { get; private set; }
 
-        // Common held data
+        // ---------- Held data ----------
         private Rigidbody _heldBody;
         private Collider[] _heldColliders;
-        private Vector3 _heldOriginalScale;
+        private Vector3 _heldOriginalScale = Vector3.one;
         private float _holdDistance;
         private Vector3 _planarOffset;
-        private Quaternion _yawOffsetFromPlayer;
+        private Quaternion _yawOffsetFromPlayer = Quaternion.identity;
         private bool _hudSpatialHeld;
 
         private float _stuckTimer;
@@ -73,6 +75,7 @@ namespace GameAssets.Scripts.Puzzle
         private Vector3 _targetVelocity;
         private bool _hasPreviousTarget;
 
+        // ---------- Saved rigidbody settings ----------
         private float _savedLinearDamping;
         private float _savedAngularDamping;
         private RigidbodyInterpolation _savedInterpolation;
@@ -122,63 +125,39 @@ namespace GameAssets.Scripts.Puzzle
 
         private void Update()
         {
-            if (IsCarrying)
-            {
-                // LMB releases without throwing (requested)
-                if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
-                {
-                    DropInWorld();
-                    return;
-                }
-                if (Keyboard.current != null && Keyboard.current.gKey.wasPressedThisFrame)
-                {
-                    DropInWorld();
-                    return;
-                }
-            }
-
+            // Held object destroyed by another system (consumed by a lock, etc.)
+            if (HeldInteractable == null && _heldBody != null) ReleaseInternal(false);
             if (!IsCarrying) return;
 
-            // No scale change - keep original scale while carried (was shrinking bug)
-            // Previously lerped to _heldOriginalScale * 1f (0.65)
+            if (leftClickDrops && Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+            {
+                DropInWorld();
+                return;
+            }
+            if (gKeyDrops && Keyboard.current != null && Keyboard.current.gKey.wasPressedThisFrame)
+            {
+                DropInWorld();
+                return;
+            }
 
-            // Spatial input only for items that use spatial or for Interactable if we allow
-            if (HeldItem != null && !HeldItem.UsesSpatialCarry) return;
             UpdateSpatialInput();
         }
 
         private void FixedUpdate()
         {
             if (!IsCarrying) return;
+            if (_heldBody == null) { ReleaseInternal(false); return; }
             DriveHeldBody();
         }
 
-        // --- PlaceableItem API ---
-
-        public bool TryPickUp(PlaceableItem item)
-        {
-            if (item == null || IsCarrying) return false;
-
-            HeldItem = item;
-            HeldInteractable = null;
-            _heldBody = item.Body;
-            _heldColliders = item.Colliders;
-            _heldOriginalScale = item.transform.localScale;
-
-            PreparePickup(item.transform);
-            item.SetHeld(true, PlayerColliders);
-            TuneBodyForCarry(_heldBody);
-            return true;
-        }
-
-        // --- Interactable API (old system) ---
+        // ================= Pickup / release API =================
 
         public bool TryPickUp(Interactable interactable)
         {
             if (interactable == null || IsCarrying) return false;
 
-            var body = interactable.GetComponentInChildren<Rigidbody>();
             var colliders = interactable.GetComponentsInChildren<Collider>(true);
+            var body = interactable.GetComponentInChildren<Rigidbody>();
 
             if (body == null)
             {
@@ -194,16 +173,15 @@ namespace GameAssets.Scripts.Puzzle
             }
 
             HeldInteractable = interactable;
-            HeldItem = null;
             _heldBody = body;
             _heldColliders = colliders;
             _heldOriginalScale = interactable.transform.localScale;
 
             PreparePickup(interactable.transform);
-            // Ignore player collision
             SetPlayerCollisionIgnored(true);
-            // Configure body
+
             SaveBodySettings(body);
+            _tunedBody = body;
             body.isKinematic = false;
             body.useGravity = false;
             body.interpolation = RigidbodyInterpolation.Interpolate;
@@ -217,13 +195,82 @@ namespace GameAssets.Scripts.Puzzle
             body.linearVelocity = Vector3.zero;
             body.angularVelocity = Vector3.zero;
             body.WakeUp();
-            _tunedBody = body;
 
             if (interactable.pickupSound != null)
                 AudioSource.PlayClipAtPoint(interactable.pickupSound, interactable.transform.position);
 
             return true;
         }
+
+        /// <summary>Normal drop: releases the item in the world (no throw).</summary>
+        public void DropInWorld()
+        {
+            if (!IsCarrying) return;
+
+            var interactable = HeldInteractable;
+            if (interactable != null && interactable.dropSound != null)
+                AudioSource.PlayClipAtPoint(interactable.dropSound, interactable.transform.position);
+
+            ReleaseInternal(true);
+        }
+
+        /// <summary>
+        /// Force-releases whatever is carried and returns it (null if nothing).
+        /// Use this when an external system consumes the carried object (insert into lock/socket, destroy...).
+        /// </summary>
+        public GameObject TakeHeldItem()
+        {
+            if (!IsCarrying) return null;
+            return ReleaseInternal(false);
+        }
+
+        /// <summary>Called when the held interactable is disabled/destroyed elsewhere.</summary>
+        public void NotifyHeldInteractableLost(Interactable interactable)
+        {
+            if (HeldInteractable != interactable) return;
+            ReleaseInternal(false);
+        }
+
+        private GameObject ReleaseInternal(bool clampReleaseSpeed)
+        {
+            var interactable = HeldInteractable;
+            var go = interactable != null ? interactable.gameObject : null;
+
+            HeldInteractable = null;
+            SpatialModeActive = false;
+            _hudSpatialHeld = false;
+
+            if (interactable != null && _heldOriginalScale != Vector3.zero)
+                interactable.transform.localScale = _heldOriginalScale;
+
+            SetPlayerCollisionIgnored(false);
+            RestoreBodyAfterCarry(clampReleaseSpeed);
+
+            _heldColliders = null;
+            _stuckTimer = 0f;
+            _bestGap = float.MaxValue;
+            _hasPreviousTarget = false;
+            _targetVelocity = Vector3.zero;
+            _planarOffset = Vector3.zero;
+
+            return go;
+        }
+
+        // ================= HUD hooks =================
+
+        public void SetSpatialModeFromHud(bool held)
+        {
+            _hudSpatialHeld = held;
+            RefreshSpatialMode();
+        }
+
+        public void ToggleSpatialModeFromHud()
+        {
+            _hudSpatialHeld = !_hudSpatialHeld;
+            RefreshSpatialMode();
+        }
+
+        // ================= Internals =================
 
         private void PreparePickup(Transform itemTransform)
         {
@@ -238,90 +285,17 @@ namespace GameAssets.Scripts.Puzzle
             _bestGap = float.MaxValue;
             _hasPreviousTarget = false;
             _targetVelocity = Vector3.zero;
+
             var playerYaw = YawRotation(playerBody.rotation);
             _yawOffsetFromPlayer = Quaternion.Inverse(playerYaw) * itemTransform.rotation;
-        }
-
-        public PlaceableItem TakeHeldItem()
-        {
-            var item = HeldItem;
-            HeldItem = null;
-            SpatialModeActive = false;
-            RestoreBodyAfterCarry(true);
-            if (item != null) item.SetHeld(false);
-            return item;
-        }
-
-        public void DropInWorld()
-        {
-            if (!IsCarrying) return;
-
-            if (HeldItem != null)
-            {
-                var item = HeldItem;
-                HeldItem = null;
-                SpatialModeActive = false;
-                RestoreBodyAfterCarry(true);
-                item.SetHeld(false);
-            }
-            else if (HeldInteractable != null)
-            {
-                var interactable = HeldInteractable;
-                HeldInteractable = null;
-                SpatialModeActive = false;
-
-                if (interactable.dropSound != null)
-                    AudioSource.PlayClipAtPoint(interactable.dropSound, interactable.transform.position);
-
-                interactable.transform.localScale = _heldOriginalScale;
-                RestoreBodyAfterCarry(true);
-                SetPlayerCollisionIgnored(false);
-                _heldBody = null;
-                _heldColliders = null;
-            }
-        }
-
-        public void NotifyHeldItemLost(PlaceableItem item)
-        {
-            if (HeldItem == item)
-            {
-                HeldItem = null;
-                SpatialModeActive = false;
-                RestoreBodyAfterCarry(false);
-            }
-        }
-
-        public void NotifyHeldInteractableLost(Interactable interactable)
-        {
-            if (HeldInteractable == interactable)
-            {
-                HeldInteractable = null;
-                SpatialModeActive = false;
-                RestoreBodyAfterCarry(false);
-                SetPlayerCollisionIgnored(false);
-            }
-        }
-
-        public void SetSpatialModeFromHud(bool held)
-        {
-            _hudSpatialHeld = held;
-            RefreshSpatialMode();
-        }
-
-        public void ToggleSpatialModeFromHud()
-        {
-            _hudSpatialHeld = !_hudSpatialHeld;
-            RefreshSpatialMode();
         }
 
         private void UpdateSpatialInput()
         {
             var mouse = Mouse.current;
             float scroll = 0f;
-            if (scrollAction != null)
-                scroll = scrollAction.action.ReadValue<Vector2>().y;
-            else if (mouse != null)
-                scroll = mouse.scroll.ReadValue().y;
+            if (scrollAction != null) scroll = scrollAction.action.ReadValue<Vector2>().y;
+            else if (mouse != null) scroll = mouse.scroll.ReadValue().y;
 
             if (Mathf.Abs(scroll) > 0.01f)
             {
@@ -335,7 +309,6 @@ namespace GameAssets.Scripts.Puzzle
             if (SpatialModeActive && mouse != null)
             {
                 var delta = mouse.delta.ReadValue();
-                // Flipped X/Y: X -> forward, Y -> up (intuitive, was opposite)
                 if (flipPlanarAxes)
                 {
                     _planarOffset += playerBody.forward * (delta.x * planeDragSensitivity);
@@ -347,6 +320,13 @@ namespace GameAssets.Scripts.Puzzle
                     _planarOffset += playerBody.forward * (delta.y * planeDragSensitivity);
                 }
             }
+        }
+
+        private void RefreshSpatialMode()
+        {
+            if (!IsCarrying) { SpatialModeActive = false; return; }
+            var mmb = Mouse.current != null && Mouse.current.middleButton.isPressed;
+            SpatialModeActive = !spatialModeRequiresMMB || mmb || _hudSpatialHeld;
         }
 
         private void DriveHeldBody()
@@ -378,8 +358,6 @@ namespace GameAssets.Scripts.Puzzle
             var forceCap = Mathf.Min(maxCarryForce, mass * maxCarryAcceleration);
             var accelCap = forceCap / mass;
             var maxSpeed = Mathf.Max(0.1f, maxCarrySpeed);
-            // For Interactable, use maxCarrySpeed as well
-            if (HeldItem != null) maxSpeed = Mathf.Max(0.1f, HeldItem.MaxCarrySpeed);
 
             var desiredVelocity = Vector3.ClampMagnitude(_targetVelocity, maxSpeed);
             if (gap > 1e-4f)
@@ -389,8 +367,7 @@ namespace GameAssets.Scripts.Puzzle
             }
 
             var neededForce = (desiredVelocity - body.linearVelocity) * (mass / dt);
-            var force = Vector3.ClampMagnitude(neededForce, forceCap);
-            body.AddForce(force, ForceMode.Force);
+            body.AddForce(Vector3.ClampMagnitude(neededForce, forceCap), ForceMode.Force);
         }
 
         private void ApplyCarryTorque(Rigidbody body, Quaternion targetRot, float dt)
@@ -400,7 +377,6 @@ namespace GameAssets.Scripts.Puzzle
             if (angleDeg > 180f) angleDeg -= 360f;
 
             var maxAngularSpeed = maxCarryAngularSpeed * Mathf.Deg2Rad;
-            if (HeldItem != null) maxAngularSpeed = Mathf.Max(0.1f, HeldItem.MaxCarryAngularSpeed) * Mathf.Deg2Rad;
 
             var desiredAngularVelocity = Vector3.zero;
             if (Mathf.Abs(angleDeg) > 0.05f && axis.sqrMagnitude > 1e-6f)
@@ -414,8 +390,7 @@ namespace GameAssets.Scripts.Puzzle
             var angularAccel = (desiredAngularVelocity - body.angularVelocity) / dt;
             angularAccel = Vector3.ClampMagnitude(angularAccel, maxCarryAngularAcceleration);
 
-            var torque = InertiaTensorTimes(body, angularAccel);
-            torque = Vector3.ClampMagnitude(torque, maxCarryTorque);
+            var torque = Vector3.ClampMagnitude(InertiaTensorTimes(body, angularAccel), maxCarryTorque);
             body.AddTorque(torque, ForceMode.Force);
         }
 
@@ -449,6 +424,34 @@ namespace GameAssets.Scripts.Puzzle
             _previousTargetPos = targetPos;
         }
 
+        private Vector3 ComputeTargetPosition()
+        {
+            var cam = Cam;
+            var origin = cam != null ? cam.transform.position : holdPoint.position;
+            var alongCam = cam != null ? cam.transform.forward : playerBody.forward;
+            return origin + alongCam * _holdDistance + _planarOffset;
+        }
+
+        private Quaternion ComputeTargetRotation() => YawRotation(playerBody.rotation) * _yawOffsetFromPlayer;
+
+        private bool IsStuckForTooLong(float gap, float closingSpeed)
+        {
+            if (gap <= stuckDropGap)
+            {
+                _stuckTimer = 0f;
+                _bestGap = gap;
+                return false;
+            }
+            if (gap < _bestGap - 0.01f || closingSpeed > 0.15f)
+            {
+                _bestGap = Mathf.Min(_bestGap, gap);
+                _stuckTimer = 0f;
+                return false;
+            }
+            _stuckTimer += Time.fixedDeltaTime;
+            return _stuckTimer >= stuckDropDelay;
+        }
+
         private void SaveBodySettings(Rigidbody body)
         {
             if (body == null) return;
@@ -464,18 +467,9 @@ namespace GameAssets.Scripts.Puzzle
             _savedUseGravity = body.useGravity;
         }
 
-        private void TuneBodyForCarry(Rigidbody body)
-        {
-            if (body == null) return;
-            SaveBodySettings(body);
-            _tunedBody = body;
-            body.linearDamping = Mathf.Max(body.linearDamping, carryDamping);
-            body.angularDamping = Mathf.Max(body.angularDamping, carryDamping);
-        }
-
         private void RestoreBodyAfterCarry(bool clampReleaseSpeed)
         {
-            var body = _tunedBody ?? _heldBody;
+            var body = _tunedBody != null ? _tunedBody : _heldBody;
             _tunedBody = null;
             _heldBody = null;
             _hasPreviousTarget = false;
@@ -492,12 +486,8 @@ namespace GameAssets.Scripts.Puzzle
             if (_savedSolverIterations > 0) body.solverIterations = _savedSolverIterations;
             if (_savedSolverVelocityIterations > 0) body.solverVelocityIterations = _savedSolverVelocityIterations;
 
-            // For PlaceableItem, SetHeld restores kinematic/gravity, for Interactable we restore here
-            if (HeldItem == null && HeldInteractable == null)
-            {
-                body.isKinematic = _savedWasKinematic;
-                body.useGravity = _savedUseGravity;
-            }
+            body.isKinematic = _savedWasKinematic;
+            body.useGravity = _savedUseGravity;
 
             if (clampReleaseSpeed && !body.isKinematic)
             {
@@ -520,64 +510,6 @@ namespace GameAssets.Scripts.Puzzle
             }
         }
 
-        private bool IsStuckForTooLong(float gap, float closingSpeed)
-        {
-            if (gap <= stuckDropGap)
-            {
-                _stuckTimer = 0f;
-                _bestGap = gap;
-                return false;
-            }
-            if (gap < _bestGap - 0.01f || closingSpeed > 0.15f)
-            {
-                _bestGap = Mathf.Min(_bestGap, gap);
-                _stuckTimer = 0f;
-                return false;
-            }
-            _stuckTimer += Time.fixedDeltaTime;
-            return _stuckTimer >= stuckDropDelay;
-        }
-
-        private Vector3 ComputeTargetPosition()
-        {
-            Transform itemTransform = null;
-            bool rotateWithHolder = false;
-            if (HeldItem != null)
-            {
-                itemTransform = HeldItem.transform;
-                rotateWithHolder = HeldItem.RotateWithHolder;
-            }
-            else if (HeldInteractable != null)
-            {
-                itemTransform = HeldInteractable.transform;
-                rotateWithHolder = false;
-            }
-
-            if (rotateWithHolder) return holdPoint.position;
-
-            var cam = Cam;
-            var origin = cam != null ? cam.transform.position : holdPoint.position;
-            var alongCam = cam != null ? cam.transform.forward : playerBody.forward;
-            return origin + alongCam * _holdDistance + _planarOffset;
-        }
-
-        private Quaternion ComputeTargetRotation()
-        {
-            if (HeldItem != null)
-                return HeldItem.RotateWithHolder ? holdPoint.rotation : YawRotation(playerBody.rotation) * _yawOffsetFromPlayer;
-            else
-                return YawRotation(playerBody.rotation) * _yawOffsetFromPlayer;
-        }
-
-        private void RefreshSpatialMode()
-        {
-            var mmb = Mouse.current != null && Mouse.current.middleButton.isPressed;
-            bool usesSpatial = HeldItem != null ? HeldItem.UsesSpatialCarry : true; // Interactable allows spatial too
-            SpatialModeActive = IsCarrying && usesSpatial && (mmb || _hudSpatialHeld || !spatialModeRequiresMMB);
-            if (spatialModeRequiresMMB)
-                SpatialModeActive = IsCarrying && usesSpatial && (mmb || _hudSpatialHeld);
-        }
-
         private Collider[] PlayerColliders
         {
             get
@@ -586,13 +518,14 @@ namespace GameAssets.Scripts.Puzzle
                 {
                     if (playerBody != null) _playerColliders = playerBody.GetComponentsInChildren<Collider>();
                     if ((_playerColliders == null || _playerColliders.Length == 0) && playerBody != null)
-                        _playerColliders = playerBody.transform.root.GetComponentsInChildren<Collider>();
+                        _playerColliders = playerBody.root.GetComponentsInChildren<Collider>();
                 }
                 return _playerColliders ?? System.Array.Empty<Collider>();
             }
         }
 
         private Camera Cam => viewCamera != null ? viewCamera : Camera.main;
+
         private static Quaternion YawRotation(Quaternion rot)
         {
             var e = rot.eulerAngles;
@@ -600,14 +533,8 @@ namespace GameAssets.Scripts.Puzzle
         }
 
         private void OnDrop(InputAction.CallbackContext ctx) => DropInWorld();
-        private void OnSpatialStarted(InputAction.CallbackContext ctx)
-        {
-            if (IsCarrying) SpatialModeActive = true;
-        }
-        private void OnSpatialCanceled(InputAction.CallbackContext ctx)
-        {
-            if (!_hudSpatialHeld) SpatialModeActive = false;
-        }
+        private void OnSpatialStarted(InputAction.CallbackContext ctx) { if (IsCarrying) SpatialModeActive = true; }
+        private void OnSpatialCanceled(InputAction.CallbackContext ctx) { if (!_hudSpatialHeld) SpatialModeActive = false; }
 
         private static void Bind(InputActionReference reference, System.Action<InputAction.CallbackContext> cb, bool started)
         {
@@ -616,6 +543,7 @@ namespace GameAssets.Scripts.Puzzle
             if (started) reference.action.started += cb;
             else reference.action.canceled += cb;
         }
+
         private static void Unbind(InputActionReference reference, System.Action<InputAction.CallbackContext> cb, bool started)
         {
             if (reference == null) return;

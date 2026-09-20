@@ -402,10 +402,8 @@ namespace GameAssets.Scripts.Environment
             var keyItem = candidate.GetComponentInChildren<KeyItem>(true);
             if (keyItem == null) keyItem = candidate.GetComponentInParent<KeyItem>();
             if (keyItem != null && keyItem.Matches(requiredKeyId)) return true;
+            return false;
 
-            var placeable = candidate.GetComponentInChildren<PlaceableItem>(true);
-            if (placeable == null) placeable = candidate.GetComponentInParent<PlaceableItem>();
-            return placeable != null && FurnitureKey.IdsMatch(placeable.ItemId, requiredKeyId);
         }
 
         private bool TryConsumeMatchingKey()

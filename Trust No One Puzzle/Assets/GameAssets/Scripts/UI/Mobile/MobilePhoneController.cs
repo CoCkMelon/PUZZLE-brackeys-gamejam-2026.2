@@ -9,7 +9,6 @@ namespace GameAssets.Scripts.UI.Mobile
 {
     /// <summary>
     /// UI Toolkit phone overlay - complete implementation.
-    /// Listens to PuzzleEvents.HintRequested (raised by WrongHintSystem and PhoneMessageTrigger)
     /// and displays messages as chat bubbles.
     /// Fixed: adds audio notification, ensures UI binds even if UXML missing, logs hints.
     /// </summary>
@@ -78,7 +77,6 @@ namespace GameAssets.Scripts.UI.Mobile
         {
             BindUi();
             SetOpen(startOpen);
-            PuzzleEvents.HintRequested += OnHint;
             if (toggleAction != null)
             {
                 toggleAction.action.Enable();
@@ -89,7 +87,6 @@ namespace GameAssets.Scripts.UI.Mobile
 
         private void OnDisable()
         {
-            PuzzleEvents.HintRequested -= OnHint;
             if (toggleAction != null)
             {
                 toggleAction.action.started -= OnToggle;

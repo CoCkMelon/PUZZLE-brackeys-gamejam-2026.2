@@ -31,19 +31,21 @@ namespace GameAssets.Scripts.UI.Mobile
 
             var carry = PlayerCarry.Instance;
             var holding = carry != null && carry.IsCarrying;
-            var spatial = holding && carry.HeldItem != null && carry.HeldItem.UsesSpatialCarry;
+            // PlaceableItem removed: every carried Interactable supports spatial shove.
+            var spatial = holding;
+            var shoving = holding && carry.SpatialModeActive;
 
             _shove.EnableInClassList("hidden", !spatial);
             _drop.EnableInClassList("hidden", !holding);
-            _shove.EnableInClassList("pressed", spatial && carry != null && carry.SpatialModeActive);
+            _shove.EnableInClassList("pressed", shoving);
 
             if (_distance != null)
             {
                 _distance.EnableInClassList("visible", spatial);
-                if (spatial) _distance.text = carry != null && carry.SpatialModeActive ? "SHOVING - drag to move" : "hold SHOVE - scroll depth";
+                if (spatial)
+                    _distance.text = shoving ? "SHOVING - drag to move" : "hold SHOVE - scroll depth";
             }
 
-            // Apply showInteractionPrompt flag - hides prompt when disabled
             if (!showInteractionPrompt && _prompt != null)
                 _prompt.EnableInClassList("visible", false);
         }
@@ -79,7 +81,6 @@ namespace GameAssets.Scripts.UI.Mobile
             _drop?.RegisterCallback<ClickEvent>(_ => PlayerCarry.Instance?.DropInWorld());
             _phone?.RegisterCallback<ClickEvent>(_ => MobilePhoneController.Instance?.Toggle());
 
-            // Restore prompt if we had one before bind
             if (!string.IsNullOrEmpty(_lastPromptText)) SetPrompt(_lastPromptText);
         }
 

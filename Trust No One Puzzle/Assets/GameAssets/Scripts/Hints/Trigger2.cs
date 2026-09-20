@@ -10,7 +10,7 @@ namespace GameAssets.Scripts.Hints
     /// Supports UnityEvents and direct messenger wiring to phone (UI Toolkit).
     /// Replaces old simple Trigger that had no way to wire to messenger.
     /// </summary>
-    public class Trigger : MonoBehaviour
+    public class Trigger2 : MonoBehaviour
     {
         [Header("Player Check")]
         [SerializeField] private string playerTag = "Player";
@@ -69,15 +69,11 @@ namespace GameAssets.Scripts.Hints
             {
                 if (WrongHintSystem.Instance != null)
                     WrongHintSystem.Instance.SendHintById(hintId);
-                else
-                    PuzzleEvents.RaiseHint(new HintMessage { text = customMessage, isMisleading = isMisleading, sourceId = sourceId });
             }
             else if (!string.IsNullOrWhiteSpace(customMessage))
             {
                 if (WrongHintSystem.Instance != null)
                     WrongHintSystem.Instance.SendCustom(customMessage, isMisleading, sourceId);
-                else
-                    PuzzleEvents.RaiseHint(new HintMessage { text = customMessage, isMisleading = isMisleading, sourceId = sourceId });
             }
         }
 
